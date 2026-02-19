@@ -1,0 +1,114 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import random
+
+
+class DiffJPEG(nn.Module):
+    """
+    Differentiable JPEG approximation via block-wise quantization
+    using a straight-through estimator.
+    """
+
+    def __init__(self, quality=50):
+        super().__init__()
+        self.quality = quality
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+        pad_h = (8 - H % 8) % 8
+        pad_w = (8 - W % 8) % 8
+        x = F.pad(x, (0, pad_w, 0, pad_h), mode="reflect")
+
+        _, _, Hp, Wp = x.shape
+        x = x.unfold(2, 8, 8).unfold(3, 8, 8)  # (B, C, H/8, W/8, 8, 8)
+        shape = x.shape
+        x_flat = x.contiguous().view(-1, 8, 8)
+
+        # Map quality to quantization levels in [-1, 1] range
+        levels = max(8, self.quality * 2)
+        step = 2.0 / levels
+
+        # Straight-through estimator: gradient flows through as if identity
+        x_q = x_flat + (torch.round(x_flat / step) * step - x_flat).detach()
+
+        x_q = x_q.view(*shape)
+        x_q = x_q.permute(0, 1, 2, 4, 3, 5).contiguous().view(B, C, Hp, Wp)
+        return x_q[:, :, :H, :W]
+
+
+class GaussianBlur(nn.Module):
+    def __init__(self, kernel_size=5, sigma_range=(0.5, 2.0)):
+        super().__init__()
+        self.kernel_size = kernel_size
+        self.sigma_range = sigma_range
+
+    def forward(self, x):
+        sigma = random.uniform(*self.sigma_range)
+        k = self.kernel_size
+        coords = torch.arange(k, dtype=x.dtype, device=x.device) - k // 2
+        g = torch.exp(-coords**2 / (2 * sigma**2))
+        kernel = (g[:, None] * g[None, :])
+        kernel = kernel / kernel.sum()
+        kernel = kernel.expand(x.shape[1], 1, k, k)
+        pad = k // 2
+        return F.conv2d(F.pad(x, [pad]*4, mode="reflect"), kernel, groups=x.shape[1])
+
+
+class GaussianNoise(nn.Module):
+    def __init__(self, std_range=(0.01, 0.05)):
+        super().__init__()
+        self.std_range = std_range
+
+    def forward(self, x):
+        std = random.uniform(*self.std_range)
+        return x + torch.randn_like(x) * std
+
+
+class PixelDropout(nn.Module):
+    def __init__(self, drop_range=(0.05, 0.15)):
+        super().__init__()
+        self.drop_range = drop_range
+
+    def forward(self, x):
+        p = random.uniform(*self.drop_range)
+        mask = (torch.rand(x.shape[0], 1, x.shape[2], x.shape[3], device=x.device) > p).float()
+        return x * mask
+
+
+class DifferentiableNoiseLayer(nn.Module):
+    """
+    Randomly applies one distortion during training to force the decoder
+    to learn robust extraction. Disabled during eval (identity pass-through).
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.jpeg_50 = DiffJPEG(quality=50)
+        self.jpeg_90 = DiffJPEG(quality=90)
+        self.blur = GaussianBlur()
+        self.noise = GaussianNoise()
+        self.dropout = PixelDropout()
+
+    def forward(self, x):
+        if not self.training:
+            return x
+
+        distortion = random.choice([
+            "identity", "jpeg_50", "jpeg_90", "blur", "noise", "dropout", "combined"
+        ])
+
+        if distortion == "identity":
+            return x
+        elif distortion == "jpeg_50":
+            return self.jpeg_50(x)
+        elif distortion == "jpeg_90":
+            return self.jpeg_90(x)
+        elif distortion == "blur":
+            return self.blur(x)
+        elif distortion == "noise":
+            return self.noise(x)
+        elif distortion == "dropout":
+            return self.dropout(x)
+        else:  # combined: JPEG + noise
+            return self.noise(self.jpeg_90(x))

@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv/
+
+# Datasets (too large for git)
+datasets/cover/*
+datasets/secret/MUL-PanSharpen/*
+datasets/secret/geojson/
+AOI_3_Paris_Train/
+!datasets/cover/.gitkeep
+
+# Training artifacts
+checkpoints/
+results/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Lock file (optional, remove this line if you want reproducible builds)
+uv.lock
