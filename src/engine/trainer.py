@@ -160,7 +160,7 @@ class NexusTrainer:
         d_fake_for_g = self.discriminator(stego)
         loss_adv = self.bce_loss(d_fake_for_g, torch.ones_like(d_fake_for_g))
 
-        total_loss = loss_invisibility + 5.0 * loss_recovery + 0.01 * loss_adv
+        total_loss = loss_invisibility + 20.0 * loss_recovery + 0.05 * loss_adv
 
         if scaler is not None:
             scaler.scale(total_loss).backward()

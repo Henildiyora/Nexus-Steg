@@ -52,13 +52,18 @@ class StegoDataset(Dataset):
             if secret_path.lower().endswith((".tif", ".tiff")):
                 img = tiff.imread(secret_path)
 
+                # Handle 16-bit satellite stretching with a zero-division guard
+                if img.dtype == np.uint16:
+                    p2, p98 = np.percentile(img, (2, 98))
+                    # Use max() with a small epsilon to prevent dividing by zero
+                    img = np.clip(img, p2, p98)
+                    img = ((img - p2) / max(p98 - p2, 1e-6) * 255).astype(np.uint8)
+                
+                # Ensure correct channel format
                 if len(img.shape) == 3:
                     if img.shape[0] < img.shape[2]:
                         img = img.transpose(1, 2, 0)
                     img = img[:, :, :3]
-
-                if img.dtype == np.uint16:
-                    img = (img / 256).astype(np.uint8)
 
                 secret = Image.fromarray(img).convert("RGB")
             else:
@@ -73,7 +78,6 @@ class StegoDataset(Dataset):
             secret = self.transform(secret)
 
         return cover, secret
-
 
 class DataPipeline:
     def __init__(self, batch_size=16):

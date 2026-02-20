@@ -10,7 +10,7 @@ from src.engine.trainer import NexusTrainer
 
 
 class NexusApp:
-    def __init__(self, epochs=100):
+    def __init__(self, epochs=5):
         self.device_mgr = DeviceManager()
         self.device = self.device_mgr.device
         self.epochs = epochs
