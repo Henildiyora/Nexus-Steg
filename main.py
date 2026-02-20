@@ -16,14 +16,10 @@ class NexusApp:
         self.epochs = epochs
 
         self.pipeline = DataPipeline(batch_size=2)
-        self.train_loader = self.pipeline.get_loader(
+        self.train_loader, self.val_loader = self.pipeline.get_train_val_loaders(
             cover_dir="datasets/cover",
             secret_dir="datasets/secret/MUL-PanSharpen",
-        )
-        self.val_loader = self.pipeline.get_loader(
-            cover_dir="datasets/cover",
-            secret_dir="datasets/secret/MUL-PanSharpen",
-            shuffle=False,
+            val_split=0.2,
         )
 
         self.hiding_net = HidingNetwork().to(self.device)

@@ -1,5 +1,5 @@
 import os
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, Subset
 from torchvision import transforms
 from PIL import Image
 from src.core.device import DeviceManager
@@ -87,15 +87,40 @@ class DataPipeline:
             ]
         )
 
-    def get_loader(self, cover_dir, secret_dir, shuffle=True):
+    def get_train_val_loaders(self, cover_dir, secret_dir, val_split=0.2, seed=42):
+        """Build one dataset and split it into non-overlapping train/val sets."""
         dataset = StegoDataset(cover_dir, secret_dir, transform=self.transform)
-        workers = self.device_manager.get_optimal_workers()
-        print(f"Using {workers} workers for data loading.")
+        total = len(dataset)
+        indices = list(range(total))
 
-        return DataLoader(
-            dataset,
+        rng = np.random.RandomState(seed)
+        rng.shuffle(indices)
+
+        split = int(total * val_split)
+        val_indices = indices[:split]
+        train_indices = indices[split:]
+
+        train_set = Subset(dataset, train_indices)
+        val_set = Subset(dataset, val_indices)
+
+        workers = self.device_manager.get_optimal_workers()
+        print(
+            f"Dataset split: {len(train_indices)} train / {len(val_indices)} val  "
+            f"({workers} workers)"
+        )
+
+        train_loader = DataLoader(
+            train_set,
             self.batch_size,
-            shuffle=shuffle,
+            shuffle=True,
             num_workers=workers,
             pin_memory=self.device_manager.is_cuda,
         )
+        val_loader = DataLoader(
+            val_set,
+            self.batch_size,
+            shuffle=False,
+            num_workers=workers,
+            pin_memory=self.device_manager.is_cuda,
+        )
+        return train_loader, val_loader
