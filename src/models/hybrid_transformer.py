@@ -3,6 +3,37 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+class CBAM(nn.Module):
+    def __init__(self,channels, reduction=16):
+        super().__init__()
+        self.channel_attn = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(channels, channels//reduction, 1),
+            nn.ReLU(),
+            nn.Conv2d(channels // reduction, channels, 1),
+            nn.Sigmoid()
+        )
+
+        self.spatial_attn = nn.Sequential(
+            nn.Conv2d(2,1, kernel_size=7, padding=3),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+
+        # Channel Attention
+        ca = self.channel_attn(x)
+        x = x * ca
+
+        # Spatial Attention
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        sa_input = torch.cat([avg_out, max_out], dim=1)
+        sa = self.spatial_attn(sa_input)
+        x = x * sa
+
+        return x
+
 class ResidualBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
         super().__init__()
@@ -19,8 +50,10 @@ class ResidualBlock(nn.Module):
             else nn.Identity()
         )
 
+        self.cbam = CBAM(out_channels)
+
     def forward(self, x):
-        return F.relu(self.conv(x) + self.shortcut(x))
+        return F.relu(self.cbam(self.conv(x)) + self.shortcut(x))
 
 
 class ViTBottleneck(nn.Module):
@@ -58,7 +91,6 @@ class HidingNetwork(nn.Module):
         self.enc2 = ResidualBlock(64, 128)
         self.enc3 = ResidualBlock(128, 256)
         self.pool = nn.MaxPool2d(2)
-
         self.vit = ViTBottleneck(256)
 
         # Decoder with U-Net skip connections (concat doubles the channels)
@@ -85,7 +117,9 @@ class HidingNetwork(nn.Module):
         x = self.upsample(x)                       # 64ch, 256x256
         x = self.dec1(torch.cat([x, s1], dim=1))   # 128->64, 256x256
 
-        return torch.tanh(self.final(x))
+        residual = torch.tanh(self.final(x))
+
+        return cover + 0.1 * residual  # Add small residual to cover for better imperceptibility
 
 
 class RevealNetwork(nn.Module):
