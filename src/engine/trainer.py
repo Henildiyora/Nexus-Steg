@@ -134,19 +134,18 @@ class NexusTrainer:
         # Discriminator Step
         self.optimizer_d.zero_grad()
 
-        with torch.amp.autocast(device_type=ac_dtype, enabled=use_amp):
-            with torch.no_grad():
-                stego_detach = self.hiding_net(cover, secret).detach()
+        with torch.no_grad():
+            stego_detach = self.hiding_net(cover, secret).detach()
 
-            d_real = self.discriminator(cover)
-            d_fake = self.discriminator(stego_detach)
+        d_real = self.discriminator(cover)
+        d_fake = self.discriminator(stego_detach)
 
-            real_label = torch.ones_like(d_real)
-            fake_label = torch.zeros_like(d_fake)
+        real_label = torch.ones_like(d_real)
+        fake_label = torch.zeros_like(d_fake)
 
-            loss_d = 0.5 * (
-                self.bce_loss(d_real, real_label) + self.bce_loss(d_fake, fake_label)
-            )
+        loss_d = 0.5 * (
+            self.bce_loss(d_real, real_label) + self.bce_loss(d_fake, fake_label)
+        )
 
         if scaler is not None:
             scaler.scale(loss_d).backward()
@@ -162,8 +161,7 @@ class NexusTrainer:
         # ---- Generator Step ----
         self.optimizer_g.zero_grad(set_to_none=True)
 
-        with torch.amp.autocast(device_type=ac_dtype, enabled=use_amp):
-            stego = self.hiding_net(cover, secret)
+        stego = self.hiding_net(cover, secret)
 
         # Apply noise distortions between encoder and decoder
         stego = self.hiding_net(cover, secret)
