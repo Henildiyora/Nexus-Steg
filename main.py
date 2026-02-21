@@ -45,6 +45,21 @@ class NexusApp:
         print(f"Starting Nexus-Steg Training on {self.device}")
 
         for epoch in range(self.epochs):
+        
+            # Define phases based on your progress through 100 epochs
+            if epoch < 30:
+                phase = 1
+                self.trainer.recovery_weight = 10.0  # Focus on pure hiding/recovery
+                self.trainer.adv_weight = 0.0       # No adversarial pressure yet
+            elif epoch < 60:
+                phase = 2
+                self.trainer.recovery_weight = 20.0  # Increase penalty for recovery errors
+                self.trainer.adv_weight = 0.01      # Start mild adversarial pressure
+            else:
+                phase = 3
+                self.trainer.recovery_weight = 30.0  # Max punishment for blurry secrets
+                self.trainer.adv_weight = 0.05      # Max pressure to pass AI sentry
+
             self.hiding_net.train()
             self.reveal_net.train()
             self.trainer.noise_layer.train()
@@ -53,7 +68,7 @@ class NexusApp:
             pbar = tqdm(
                 enumerate(self.train_loader),
                 total=len(self.train_loader),
-                desc=f"Epoch {epoch}/{self.epochs}",
+                desc=f"Epoch {epoch}/{self.epochs} (Phase {phase})", 
             )
 
             for i, (cover, secret) in pbar:
@@ -64,7 +79,10 @@ class NexusApp:
                     device_type=self.device.type, enabled=self.use_amp
                 ):
                     loss, l_inv, l_rec, l_disc = self.trainer.train_step(
-                        cover, secret, scaler=self.scaler if self.use_amp else None
+                        cover, 
+                        secret, 
+                        phase=phase, 
+                        scaler=self.scaler if self.use_amp else None
                     )
 
                 total_loss += loss

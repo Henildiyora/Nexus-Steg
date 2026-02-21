@@ -3,10 +3,19 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torchvision.models import vgg16, VGG16_Weights
+import torch.nn.functional as F
 
 from src.models.noise_layer import DifferentiableNoiseLayer
 from src.models.discriminator import SteganalysisDiscriminator
 
+
+class FFTLoss(nn.Module):
+    """Penalizes spectral discrepancies to survive JPEG/WhatsApp."""
+    def forward(self, x, y):
+
+        fx = torch.fft.rfft2(x)
+        fy = torch.fft.rfft2(y)
+        return F.l1_loss(torch.abs(fx), torch.abs(fy))
 
 class VGGPerceptualLoss(nn.Module):
     """
@@ -110,6 +119,10 @@ class NexusTrainer:
         self.bce_loss = nn.BCEWithLogitsLoss()
         self.perceptual_loss = VGGPerceptualLoss(self.device)
 
+        self.fft_loss = FFTLoss()
+        self.recovery_weight = 5.0
+        self.adv_weight = 0.0
+
     def step_schedulers(self):
         self.scheduler_g.step()
         self.scheduler_d.step()
@@ -117,8 +130,8 @@ class NexusTrainer:
     def _get_all_generator_params(self):
         return list(self.hiding_net.parameters()) + list(self.reveal_net.parameters())
 
-    def train_step(self, cover, secret, scaler=None):
-        # ---- Discriminator Step ----
+    def train_step(self, cover, secret, phase=1, scaler=None):
+        # Discriminator Step
         self.optimizer_d.zero_grad()
 
         with torch.no_grad():
@@ -145,22 +158,29 @@ class NexusTrainer:
             nn.utils.clip_grad_norm_(self.discriminator.parameters(), max_norm=1.0)
             self.optimizer_d.step()
 
-        # ---- Generator Step ----
+        # Generator Step
         self.optimizer_g.zero_grad()
 
         stego = self.hiding_net(cover, secret)
 
         # Apply noise distortions between encoder and decoder
-        stego_noised = self.noise_layer(stego)
+        stego = self.hiding_net(cover, secret)
+        stego_noised = self.noise_layer(stego) if phase > 1 else stego
         revealed = self.reveal_net(stego_noised)
 
-        loss_invisibility = self.mse_loss(stego, cover) + 0.1 * self.perceptual_loss(stego, cover)
-        loss_recovery = self.mse_loss(revealed, secret)
-
-        d_fake_for_g = self.discriminator(stego)
-        loss_adv = self.bce_loss(d_fake_for_g, torch.ones_like(d_fake_for_g))
-
-        total_loss = loss_invisibility + 20.0 * loss_recovery + 0.05 * loss_adv
+        # Multi-Objective Loss
+        l_inv = self.mse_loss(stego, cover) + \
+                0.1 * self.perceptual_loss(stego, cover) + \
+                0.1 * self.fft_loss(stego, cover)
+        l_rec = F.mse_loss(revealed, secret)
+        
+        # Adversarial Loss 
+        l_adv = 0
+        if phase >= 2:
+            d_fake_for_g = self.discriminator(stego)
+            l_adv = self.bce_loss(d_fake_for_g, torch.ones_like(d_fake_for_g))
+        
+        total_loss = l_inv + self.recovery_weight * l_rec + self.adv_weight * l_adv
 
         if scaler is not None:
             scaler.scale(total_loss).backward()
@@ -173,7 +193,7 @@ class NexusTrainer:
             nn.utils.clip_grad_norm_(self._get_all_generator_params(), max_norm=1.0)
             self.optimizer_g.step()
 
-        return total_loss.item(), loss_invisibility.item(), loss_recovery.item(), loss_d.item()
+        return total_loss.item(), l_inv.item(), l_rec.item(), loss_d.item()
 
     @torch.no_grad()
     def validate(self, val_loader):
