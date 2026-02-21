@@ -117,22 +117,26 @@ class NexusTrainer:
     def _get_all_generator_params(self):
         return list(self.hiding_net.parameters()) + list(self.reveal_net.parameters())
 
-    def train_step(self, cover, secret, scaler=None):
+    def train_step(self, cover, secret, scaler=None, amp_dtype=None):
+        use_amp = amp_dtype is not None
+        ac_dtype = amp_dtype or 'cpu'
+
         # ---- Discriminator Step ----
-        self.optimizer_d.zero_grad()
+        self.optimizer_d.zero_grad(set_to_none=True)
 
-        with torch.no_grad():
-            stego_detach = self.hiding_net(cover, secret).detach()
+        with torch.amp.autocast(device_type=ac_dtype, enabled=use_amp):
+            with torch.no_grad():
+                stego_detach = self.hiding_net(cover, secret).detach()
 
-        d_real = self.discriminator(cover)
-        d_fake = self.discriminator(stego_detach)
+            d_real = self.discriminator(cover)
+            d_fake = self.discriminator(stego_detach)
 
-        real_label = torch.ones_like(d_real)
-        fake_label = torch.zeros_like(d_fake)
+            real_label = torch.ones_like(d_real)
+            fake_label = torch.zeros_like(d_fake)
 
-        loss_d = 0.5 * (
-            self.bce_loss(d_real, real_label) + self.bce_loss(d_fake, fake_label)
-        )
+            loss_d = 0.5 * (
+                self.bce_loss(d_real, real_label) + self.bce_loss(d_fake, fake_label)
+            )
 
         if scaler is not None:
             scaler.scale(loss_d).backward()
@@ -146,21 +150,21 @@ class NexusTrainer:
             self.optimizer_d.step()
 
         # ---- Generator Step ----
-        self.optimizer_g.zero_grad()
+        self.optimizer_g.zero_grad(set_to_none=True)
 
-        stego = self.hiding_net(cover, secret)
+        with torch.amp.autocast(device_type=ac_dtype, enabled=use_amp):
+            stego = self.hiding_net(cover, secret)
 
-        # Apply noise distortions between encoder and decoder
-        stego_noised = self.noise_layer(stego)
-        revealed = self.reveal_net(stego_noised)
+            stego_noised = self.noise_layer(stego)
+            revealed = self.reveal_net(stego_noised)
 
-        loss_invisibility = self.mse_loss(stego, cover) + 0.1 * self.perceptual_loss(stego, cover)
-        loss_recovery = self.mse_loss(revealed, secret)
+            loss_invisibility = self.mse_loss(stego, cover) + 0.1 * self.perceptual_loss(stego, cover)
+            loss_recovery = self.mse_loss(revealed, secret)
 
-        d_fake_for_g = self.discriminator(stego)
-        loss_adv = self.bce_loss(d_fake_for_g, torch.ones_like(d_fake_for_g))
+            d_fake_for_g = self.discriminator(stego)
+            loss_adv = self.bce_loss(d_fake_for_g, torch.ones_like(d_fake_for_g))
 
-        total_loss = loss_invisibility + 20.0 * loss_recovery + 0.05 * loss_adv
+            total_loss = loss_invisibility + 20.0 * loss_recovery + 0.05 * loss_adv
 
         if scaler is not None:
             scaler.scale(total_loss).backward()
