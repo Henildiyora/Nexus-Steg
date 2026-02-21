@@ -15,7 +15,7 @@ class NexusApp:
         self.device = self.device_mgr.device
         self.epochs = epochs
 
-        self.pipeline = DataPipeline(batch_size=2)
+        self.pipeline = DataPipeline(batch_size=8)
         self.train_loader, self.val_loader = self.pipeline.get_train_val_loaders(
             cover_dir="datasets/cover",
             secret_dir="datasets/secret/MUL-PanSharpen",
@@ -72,18 +72,16 @@ class NexusApp:
             )
 
             for i, (cover, secret) in pbar:
-                cover = cover.to(self.device)
-                secret = secret.to(self.device)
+                cover = cover.to(self.device, non_blocking=True)
+                secret = secret.to(self.device, non_blocking=True)
 
-                with torch.amp.autocast(
-                    device_type=self.device.type, enabled=self.use_amp
-                ):
-                    loss, l_inv, l_rec, l_disc = self.trainer.train_step(
-                        cover, 
-                        secret, 
-                        phase=phase, 
-                        scaler=self.scaler if self.use_amp else None
-                    )
+                loss, l_inv, l_rec, l_disc = self.trainer.train_step(
+                    cover, 
+                    secret, 
+                    phase=phase,
+                    scaler=self.scaler if self.use_amp else None,
+                    amp_dtype=self.device.type if self.use_amp else None,
+                )
 
                 total_loss += loss
                 pbar.set_postfix(
@@ -105,12 +103,11 @@ class NexusApp:
             )
 
             # Visual results from last batch
-            with torch.no_grad():
-                with torch.amp.autocast(
-                    device_type=self.device.type, enabled=self.use_amp
-                ):
-                    stego = self.hiding_net(cover, secret)
-                    revealed = self.reveal_net(stego)
+            with torch.no_grad(), torch.amp.autocast(
+                device_type=self.device.type, enabled=self.use_amp
+            ):
+                stego = self.hiding_net(cover, secret)
+                revealed = self.reveal_net(stego)
                 self.save_visual_results(
                     epoch, cover[0:1], secret[0:1], stego[0:1], revealed[0:1]
                 )
