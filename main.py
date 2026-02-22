@@ -29,11 +29,6 @@ class NexusApp:
         self.hiding_net = HidingNetwork().to(self.device)
         self.reveal_net = RevealNetwork().to(self.device)
 
-        if self.device_mgr.is_cuda:
-            self.hiding_net = torch.compile(self.hiding_net)
-            self.reveal_net = torch.compile(self.reveal_net)
-            print("torch.compile() enabled for CUDA.")
-
         self.trainer = NexusTrainer(
             self.hiding_net, self.reveal_net, self.device_mgr, total_epochs=epochs
         )
