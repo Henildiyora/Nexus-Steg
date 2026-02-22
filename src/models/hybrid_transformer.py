@@ -99,27 +99,27 @@ class HidingNetwork(nn.Module):
         self.dec2 = ResidualBlock(128 + 128, 64)   # dec3_out + skip2
         self.dec1 = ResidualBlock(64 + 64, 64)     # dec2_out + skip1
         self.final = nn.Conv2d(64, 3, kernel_size=1)
+        self.alpha = nn.Parameter(torch.tensor(0.4))
 
     def forward(self, cover, secret):
         x = torch.cat([cover, secret], dim=1)
 
-        s1 = self.enc1(x)          # 64ch, 256x256
-        s2 = self.enc2(self.pool(s1))  # 128ch, 128x128
-        s3 = self.enc3(self.pool(s2))  # 256ch, 64x64
-        x = self.pool(s3)             # 256ch, 32x32
+        s1 = self.enc1(x)
+        s2 = self.enc2(self.pool(s1))
+        s3 = self.enc3(self.pool(s2))
+        x = self.pool(s3)
 
         x = self.vit(x)
 
-        x = self.upsample(x)                       # 256ch, 64x64
-        x = self.dec3(torch.cat([x, s3], dim=1))   # 512->128, 64x64
-        x = self.upsample(x)                       # 128ch, 128x128
-        x = self.dec2(torch.cat([x, s2], dim=1))   # 256->64, 128x128
-        x = self.upsample(x)                       # 64ch, 256x256
-        x = self.dec1(torch.cat([x, s1], dim=1))   # 128->64, 256x256
+        x = self.upsample(x)
+        x = self.dec3(torch.cat([x, s3], dim=1))
+        x = self.upsample(x)
+        x = self.dec2(torch.cat([x, s2], dim=1))
+        x = self.upsample(x)
+        x = self.dec1(torch.cat([x, s1], dim=1))
 
         residual = torch.tanh(self.final(x))
-
-        return cover + 0.1 * residual  # Add small residual to cover for better imperceptibility
+        return cover + self.alpha.clamp(0.1, 0.8) * residual
 
 
 class RevealNetwork(nn.Module):

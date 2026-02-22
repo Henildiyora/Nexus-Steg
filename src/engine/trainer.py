@@ -54,41 +54,41 @@ def compute_psnr(img1, img2):
     mse = torch.mean((img1 - img2) ** 2)
     if mse == 0:
         return torch.tensor(float("inf"))
-    return 10 * torch.log10(4.0 / mse)  # max range is 2.0 for [-1,1], so peak^2 = 4
+    return 10 * torch.log10(4.0 / mse)
 
 
-def _gaussian_kernel_1d(size, sigma, device):
-    coords = torch.arange(size, dtype=torch.float32, device=device) - size // 2
-    g = torch.exp(-coords ** 2 / (2 * sigma ** 2))
-    return g / g.sum()
+class SSIMCalculator:
+    """SSIM with a pre-computed Gaussian window to avoid re-allocation every call."""
 
+    def __init__(self, window_size=11, sigma=1.5, channels=3, device="cpu"):
+        coords = torch.arange(window_size, dtype=torch.float32, device=device) - window_size // 2
+        g = torch.exp(-coords ** 2 / (2 * sigma ** 2))
+        kernel_1d = g / g.sum()
+        kernel_2d = kernel_1d[:, None] * kernel_1d[None, :]
+        self.window = kernel_2d.expand(channels, 1, window_size, window_size).contiguous()
+        self.pad = window_size // 2
+        self.channels = channels
 
-def compute_ssim(img1, img2, window_size=11, sigma=1.5):
-    """Structural similarity between two tensors in [-1, 1] range."""
-    device = img1.device
-    C = img1.shape[1]
+    def __call__(self, img1, img2):
+        C = self.channels
+        pad = self.pad
+        w = self.window
 
-    kernel_1d = _gaussian_kernel_1d(window_size, sigma, device)
-    kernel_2d = kernel_1d[:, None] * kernel_1d[None, :]
-    window = kernel_2d.expand(C, 1, window_size, window_size).contiguous()
+        mu1 = F.conv2d(img1, w, padding=pad, groups=C)
+        mu2 = F.conv2d(img2, w, padding=pad, groups=C)
+        mu1_sq, mu2_sq = mu1 ** 2, mu2 ** 2
+        mu12 = mu1 * mu2
 
-    pad = window_size // 2
+        sigma1_sq = F.conv2d(img1 * img1, w, padding=pad, groups=C) - mu1_sq
+        sigma2_sq = F.conv2d(img2 * img2, w, padding=pad, groups=C) - mu2_sq
+        sigma12 = F.conv2d(img1 * img2, w, padding=pad, groups=C) - mu12
 
-    mu1 = nn.functional.conv2d(img1, window, padding=pad, groups=C)
-    mu2 = nn.functional.conv2d(img2, window, padding=pad, groups=C)
-    mu1_sq, mu2_sq = mu1 ** 2, mu2 ** 2
-    mu12 = mu1 * mu2
-
-    sigma1_sq = nn.functional.conv2d(img1 * img1, window, padding=pad, groups=C) - mu1_sq
-    sigma2_sq = nn.functional.conv2d(img2 * img2, window, padding=pad, groups=C) - mu2_sq
-    sigma12 = nn.functional.conv2d(img1 * img2, window, padding=pad, groups=C) - mu12
-
-    C1 = 0.01 ** 2
-    C2 = 0.03 ** 2
-    ssim_map = ((2 * mu12 + C1) * (2 * sigma12 + C2)) / (
-        (mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2)
-    )
-    return ssim_map.mean()
+        C1 = 0.01 ** 2
+        C2 = 0.03 ** 2
+        ssim_map = ((2 * mu12 + C1) * (2 * sigma12 + C2)) / (
+            (mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2)
+        )
+        return ssim_map.mean()
 
 
 class NexusTrainer:
@@ -120,6 +120,7 @@ class NexusTrainer:
         self.perceptual_loss = VGGPerceptualLoss(self.device)
 
         self.fft_loss = FFTLoss()
+        self.ssim_calc = SSIMCalculator(device=self.device)
         self.recovery_weight = 5.0
         self.adv_weight = 0.0
 
@@ -162,9 +163,6 @@ class NexusTrainer:
         self.optimizer_g.zero_grad()
 
         stego = self.hiding_net(cover, secret)
-
-        # Apply noise distortions between encoder and decoder
-        stego = self.hiding_net(cover, secret)
         stego_noised = self.noise_layer(stego) if phase > 1 else stego
         revealed = self.reveal_net(stego_noised)
 
@@ -204,6 +202,7 @@ class NexusTrainer:
         psnr_stego_sum, ssim_stego_sum = 0.0, 0.0
         psnr_secret_sum, ssim_secret_sum = 0.0, 0.0
         count = 0
+        sample = None
 
         for cover, secret in val_loader:
             cover, secret = cover.to(self.device), secret.to(self.device)
@@ -211,10 +210,13 @@ class NexusTrainer:
             revealed = self.reveal_net(stego)
 
             psnr_stego_sum += compute_psnr(stego, cover).item()
-            ssim_stego_sum += compute_ssim(stego, cover).item()
+            ssim_stego_sum += self.ssim_calc(stego, cover).item()
             psnr_secret_sum += compute_psnr(revealed, secret).item()
-            ssim_secret_sum += compute_ssim(revealed, secret).item()
+            ssim_secret_sum += self.ssim_calc(revealed, secret).item()
             count += 1
+
+            if sample is None:
+                sample = (cover[0:1], secret[0:1], stego[0:1], revealed[0:1])
 
         self.hiding_net.train()
         self.reveal_net.train()
@@ -226,4 +228,5 @@ class NexusTrainer:
             "ssim_stego": ssim_stego_sum / n,
             "psnr_secret": psnr_secret_sum / n,
             "ssim_secret": ssim_secret_sum / n,
+            "sample": sample,
         }
