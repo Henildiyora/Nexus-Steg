@@ -83,14 +83,12 @@ class NexusApp:
                 cover = cover.to(self.device, non_blocking=True)
                 secret = secret.to(self.device, non_blocking=True)
 
-                with torch.amp.autocast(
-                    device_type=self.device.type, enabled=self.use_amp
-                ):
+                with torch.amp.autocast(device_type=self.device.type, enabled=self.use_amp):
                     loss, l_inv, l_rec, l_disc = self.trainer.train_step(
-                        cover,
-                        secret,
-                        phase=phase,
-                        scaler=self.scaler if self.use_amp else None,
+                        cover, 
+                        secret, 
+                        phase=phase, 
+                        scaler=self.scaler if self.use_amp else None
                     )
 
                 total_loss += loss

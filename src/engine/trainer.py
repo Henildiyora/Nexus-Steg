@@ -159,8 +159,8 @@ class NexusTrainer:
             nn.utils.clip_grad_norm_(self.discriminator.parameters(), max_norm=1.0)
             self.optimizer_d.step()
 
-        # Generator Step
-        self.optimizer_g.zero_grad()
+        # ---- Generator Step ----
+        self.optimizer_g.zero_grad(set_to_none=True)
 
         stego = self.hiding_net(cover, secret)
         stego_noised = self.noise_layer(stego) if phase > 1 else stego

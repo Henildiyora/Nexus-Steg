@@ -14,6 +14,9 @@ class DeviceManager:
         self.is_cuda = self.device.type == "cuda"
         self.is_mps = self.device.type == "mps"
 
+        if self.is_cuda:
+            torch.backends.cudnn.benchmark = True
+
     def _detect_device(self):
         if torch.cuda.is_available():
             print("CUDA is available. Using GPU.")
