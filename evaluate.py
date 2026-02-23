@@ -297,7 +297,7 @@ def main():
         "--cover_dir", type=str, default="datasets/cover", help="Cover images directory"
     )
     parser.add_argument(
-        "--secret_dir", type=str, default="datasets/secret/MUL-PanSharpen",
+        "--secret_dir", type=str, default="datasets/secret/test",
         help="Secret images directory",
     )
     args = parser.parse_args()

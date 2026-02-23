@@ -12,9 +12,8 @@ wheels/
 # Datasets (too large for git)
 datasets.zip
 datasets/cover/*
-datasets/secret/MUL-PanSharpen/*
-datasets/secret/geojson/
-AOI_3_Paris_Train/
+datasets/secret/train/*
+datasets/secret/test/*
 !datasets/cover/.gitkeep
 
 # Training artifacts

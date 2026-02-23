@@ -22,7 +22,7 @@ class NexusApp:
         self.pipeline = DataPipeline(batch_size=batch_size)
         self.train_loader, self.val_loader = self.pipeline.get_train_val_loaders(
             cover_dir="datasets/cover",
-            secret_dir="datasets/secret/MUL-PanSharpen",
+            secret_dir="datasets/secret/train",
             val_split=0.2,
         )
 

@@ -399,8 +399,13 @@ The VGG perceptual loss properly converts from the training range [-1, 1] to Ima
 ```
 nexus-steg/
 ├── main.py                          # Entry point -- phase-based training orchestration
+├── evaluate.py                      # Evaluation test suite (8 attack scenarios)
 ├── check_health.py                  # Architecture health check (verifies CBAM, residual, FFT, noise)
+├── visualize_arch.py                # Generate computational graph PNGs
+├── Makefile                         # Build/run orchestration (make train, make test, etc.)
 ├── pyproject.toml                   # Dependencies and project metadata
+├── scripts/
+│   └── download_data.sh             # Automated dataset download (MS-COCO + SpaceNet)
 ├── src/
 │   ├── core/
 │   │   └── device.py                # Hardware detection (CUDA / MPS / CPU)
@@ -413,13 +418,12 @@ nexus-steg/
 │       ├── noise_layer.py           # Differentiable JPEG, blur, noise, dropout, resize
 │       └── discriminator.py         # SRNet-inspired steganalysis discriminator
 ├── datasets/
-│   ├── cover/                       # Place cover images here (PNG/JPG)
+│   ├── cover/                       # Cover images (PNG/JPG) -- downloaded by scripts/download_data.sh
 │   └── secret/
-│       ├── MUL-PanSharpen/          # Place secret images here (TIFF/PNG/JPG)
-│       └── geojson/buildings/       # SpaceNet GeoJSON annotations
+│       ├── train/                   # Secret training images (SpaceNet 2 vegas)
+│       └── test/                    # Secret test images (SpaceNet 2 vegas)
 ├── checkpoints/                     # Saved model weights per epoch
-├── results/                         # Visual comparison images per epoch
-└── AOI_3_Paris_Train/               # SpaceNet Paris metadata
+└── results/                         # Visual comparison images per epoch
 ```
 
 ---
@@ -484,24 +488,27 @@ You need two sets of images:
 
 | Folder | What Goes Here | Recommended Source |
 |---|---|---|
-| `datasets/cover/` | Natural photographs (the "innocent" carriers) | [MS-COCO](https://cocodataset.org/) val2017 or train2017 |
-| `datasets/secret/MUL-PanSharpen/` | The images to hide (satellite imagery, blueprints, etc.) | [SpaceNet](https://spacenet.ai/) Paris MUL-PanSharpen TIFF files |
+| `datasets/cover/` | Natural photographs (the "innocent" carriers) | [MS-COCO](https://cocodataset.org/) val2017 |
+| `datasets/secret/train/` | Secret images for training | [SpaceNet 2](https://spacenet.ai/spacenet-buildings-dataset-v2/) train (Vegas, Paris, Shanghai, Khartoum) |
+| `datasets/secret/test/` | Secret images for evaluation | [SpaceNet 2](https://spacenet.ai/spacenet-buildings-dataset-v2/) test (Vegas, Paris, Shanghai, Khartoum) |
 
-**Quick start with MS-COCO covers:**
+**Automatic download (recommended):**
 
 ```bash
-# Download COCO val2017 (about 1GB, 5000 images)
-mkdir -p datasets/cover
-cd datasets/cover
-curl -O http://images.cocodataset.org/zips/val2017.zip
-unzip val2017.zip
-mv val2017/* .
-rmdir val2017
-rm val2017.zip
-cd ../..
+make download
 ```
 
-**For SpaceNet secrets**, download the Paris AOI_3 MUL-PanSharpen images from [SpaceNet on AWS](https://spacenet.ai/datasets/) and place the `.tif` files in `datasets/secret/MUL-PanSharpen/`.
+This runs `scripts/download_data.sh`, which downloads:
+- MS-COCO val2017 covers (~1 GB, 5000 images)
+- SpaceNet 2 training imagery from all 4 cities (~56 GB) into `datasets/secret/train/`
+- SpaceNet 2 test imagery from all 4 cities (~19 GB) into `datasets/secret/test/`
+
+The script is idempotent -- it skips datasets that are already present.
+
+**Prerequisites for automatic download:**
+- `curl` and `tar`
+
+**Manual alternative:** place your own images directly into `datasets/cover/` and `datasets/secret/train/` / `datasets/secret/test/`.
 
 > Both folders must contain at least 1 image each. The pipeline supports `.png`, `.jpg`, `.jpeg`, `.tif`, and `.tiff` formats.
 
@@ -511,14 +518,34 @@ cd ../..
 
 ```bash
 # Run training (100 epochs by default)
+make train
+
+# Or directly
 uv run python main.py
 
-# Or with the venv directly
-.venv/bin/python main.py        # macOS / Linux
-.venv\Scripts\python main.py    # Windows
-
 # Run architecture health check first (optional)
-uv run python check_health.py
+make health
+```
+
+### All Makefile Targets
+
+```bash
+make install     # Install Python dependencies (uv sync)
+make download    # Download MS-COCO and SpaceNet datasets
+make train       # Train the model (100 epochs)
+make test        # Evaluate against 8 attack scenarios
+make visualize   # Generate architecture graph PNGs
+make health      # Run architecture health check
+make clean       # Remove results/ and checkpoints/
+make all         # install -> download -> train -> test
+make help        # Show all targets and configurable variables
+```
+
+Override defaults with environment variables:
+
+```bash
+make train EPOCHS=50
+make test CHECKPOINT=checkpoints/nexus_epoch_49.pth
 ```
 
 **What happens when you run it:**
@@ -535,7 +562,7 @@ uv run python check_health.py
 ```
 CUDA is available. Using GPU.
 Cover path: .../datasets/cover | Found: 5000 images
-Secret path: .../datasets/secret/MUL-PanSharpen | Found: 1000 images
+Secret path: .../datasets/secret/train | Found: 1000 images
 Dataset split: 4000 train / 1000 val  (7 workers)
 Starting Nexus-Steg Training on cuda
 
