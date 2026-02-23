@@ -12,16 +12,10 @@ S3_BASE="https://spacenet-dataset.s3.amazonaws.com/spacenet/SN2_buildings/tarbal
 
 SN2_TRAIN_TARBALLS=(
     "SN2_buildings_train_AOI_2_Vegas.tar.gz"
-    "SN2_buildings_train_AOI_3_Paris.tar.gz"
-    "SN2_buildings_train_AOI_4_Shanghai.tar.gz"
-    "SN2_buildings_train_AOI_5_Khartoum.tar.gz"
 )
 
 SN2_TEST_TARBALLS=(
     "AOI_2_Vegas_Test_public.tar.gz"
-    "AOI_3_Paris_Test_public.tar.gz"
-    "AOI_4_Shanghai_Test_public.tar.gz"
-    "AOI_5_Khartoum_Test_public.tar.gz"
 )
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -112,7 +106,7 @@ download_sn2() {
 
 main() {
     info "Nexus-Steg dataset download"
-    info "SpaceNet 2 — Vegas, Paris, Shanghai, Khartoum"
+    info "SpaceNet 2 — Vegas"
     echo ""
 
     download_coco
