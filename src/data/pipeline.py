@@ -83,7 +83,19 @@ class DataPipeline:
     def __init__(self, batch_size=16):
         self.batch_size = batch_size
         self.device_manager = DeviceManager()
-        self.transform = transforms.Compose(
+        self.train_transform = transforms.Compose(
+            [
+                transforms.Resize((256, 256)),
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomVerticalFlip(),
+                transforms.RandomRotation(15),
+                transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.2, hue=0.1),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+            ]
+        )
+
+        self.test_transform = transforms.Compose(
             [
                 transforms.Resize((256, 256)),
                 transforms.ToTensor(),
@@ -92,8 +104,10 @@ class DataPipeline:
         )
 
     def get_train_val_loaders(self, cover_dir, secret_dir, val_split=0.2, seed=42):
-        """Build one dataset and split it into non-overlapping train/val sets."""
-        dataset = StegoDataset(cover_dir, secret_dir, transform=self.transform)
+        """
+        Build one dataset and split it into non-overlapping train/val sets.
+        """
+        dataset = StegoDataset(cover_dir, secret_dir, transform=None)
         total = len(dataset)
         indices = list(range(total))
 
@@ -106,6 +120,9 @@ class DataPipeline:
 
         train_set = Subset(dataset, train_indices)
         val_set = Subset(dataset, val_indices)
+
+        train_set.dataset.transform = self.train_transform
+        val_set.dataset.transform = self.test_transform
 
         workers = self.device_manager.get_optimal_workers()
         print(
