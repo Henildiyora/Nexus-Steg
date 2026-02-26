@@ -7,25 +7,21 @@ import tifffile as tiff
 import numpy as np
 
 
+def _collect_images(root_dir):
+    """Recursively collect image paths under *root_dir*."""
+    valid_ext = (".tif", ".tiff")
+    paths = []
+    for dirpath, _, filenames in os.walk(root_dir):
+        for f in filenames:
+            if f.lower().endswith(valid_ext):
+                paths.append(os.path.join(dirpath, f))
+    return sorted(paths)
+
+
 class StegoDataset(Dataset):
     def __init__(self, cover_dir, secret_dir, transform=None):
-        valid_ext = (".png", ".jpg", ".jpeg", ".tif", ".tiff")
-
-        self.cover_path = sorted(
-            [
-                os.path.join(cover_dir, f)
-                for f in os.listdir(cover_dir)
-                if f.lower().endswith(valid_ext)
-            ]
-        )
-
-        self.secret_path = sorted(
-            [
-                os.path.join(secret_dir, f)
-                for f in os.listdir(secret_dir)
-                if f.lower().endswith(valid_ext)
-            ]
-        )
+        self.cover_path = _collect_images(cover_dir)
+        self.secret_path = _collect_images(secret_dir)
 
         print(
             f"Cover path: {os.path.abspath(cover_dir)} | Found: {len(self.cover_path)} images"

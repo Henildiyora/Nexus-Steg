@@ -8,15 +8,9 @@ SECRET_TEST_DIR="$ROOT_DIR/datasets/secret/test"
 
 COCO_URL="http://images.cocodataset.org/zips/val2017.zip"
 
-S3_BASE="https://spacenet-dataset.s3.amazonaws.com/spacenet/SN2_buildings/tarballs"
+S3_BUCKET="s3://spacenet-dataset/spacenet/SN2_buildings"
 
-SN2_TRAIN_TARBALLS=(
-    "SN2_buildings_train_AOI_2_Vegas.tar.gz"
-)
-
-SN2_TEST_TARBALLS=(
-    "AOI_2_Vegas_Test_public.tar.gz"
-)
+CITIES=("AOI_2_Vegas" "AOI_3_Paris" "AOI_4_Shanghai" "AOI_5_Khartoum")
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -67,56 +61,72 @@ download_coco() {
     ok "Cover images ready ($(count_images "$COVER_DIR") files)."
 }
 
-# ── SpaceNet 2 — all 4 cities (secret images) ───────────────────────────────
+# ── SpaceNet 2 — MUL-PanSharpen only, all 4 cities ─────────────────────────
+#
+# S3 layout (no account needed with --no-sign-request):
+#   s3://spacenet-dataset/spacenet/SN2_buildings/train/<CITY>/PS-MS/
+#   s3://spacenet-dataset/spacenet/SN2_buildings/test_public/<CITY>/PS-MS/
+#
+# Local layout:
+#   datasets/secret/train/<CITY>/   ← MUL-PanSharpen TIFs
+#   datasets/secret/test/<CITY>/
 
-download_sn2() {
-    local split_name="$1" dest_dir="$2"
-    shift 2
-    local tarballs=("$@")
+download_sn2_city() {
+    local split_name="$1" s3_split="$2" dest_dir="$3" city="$4"
+    local city_dir="$dest_dir/$city"
 
-    info "Checking secret $split_name images in $dest_dir ..."
-    mkdir -p "$dest_dir"
+    mkdir -p "$city_dir"
 
-    existing=$(count_images "$dest_dir")
-    if [ "$existing" -ge 100 ]; then
-        ok "Secret $split_name directory already has $existing images — skipping download."
+    existing=$(count_images "$city_dir")
+    if [ "$existing" -ge 10 ]; then
+        ok "$city ($split_name) already has $existing images — skipping."
         return
     fi
 
-    need_cmd curl
+    local s3_path="$S3_BUCKET/$s3_split/$city/PS-MS/"
 
-    for tarball in "${tarballs[@]}"; do
-        local url="$S3_BASE/$tarball"
-        local archive_path="$ROOT_DIR/datasets/$tarball"
+    info "Downloading $city $split_name MUL-PanSharpen ..."
+    aws s3 cp "$s3_path" "$city_dir/" \
+        --recursive --no-sign-request --quiet
 
-        info "Downloading $tarball ..."
-        curl -L --progress-bar -o "$archive_path" "$url"
+    ok "$city ($split_name) done — $(count_images "$city_dir") images."
+}
 
-        info "Extracting $tarball ..."
-        tar -xzf "$archive_path" -C "$dest_dir"
+download_sn2() {
+    need_cmd aws
 
-        rm -f "$archive_path"
-        ok "$tarball done."
+    info "Downloading SpaceNet 2 MUL-PanSharpen (4 cities, train + test) ..."
+    echo ""
+
+    for city in "${CITIES[@]}"; do
+        download_sn2_city "train" "train" "$SECRET_TRAIN_DIR" "$city"
     done
 
-    ok "Secret $split_name images ready ($(count_images "$dest_dir") files)."
+    echo ""
+
+    for city in "${CITIES[@]}"; do
+        download_sn2_city "test" "test_public" "$SECRET_TEST_DIR" "$city"
+    done
 }
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 main() {
     info "Nexus-Steg dataset download"
-    info "SpaceNet 2 — Vegas"
+    info "SpaceNet 2 — Vegas, Paris, Shanghai, Khartoum (MUL-PanSharpen)"
     echo ""
 
     download_coco
     echo ""
-    download_sn2 "train" "$SECRET_TRAIN_DIR" "${SN2_TRAIN_TARBALLS[@]}"
-    echo ""
-    download_sn2 "test"  "$SECRET_TEST_DIR"  "${SN2_TEST_TARBALLS[@]}"
+    download_sn2
 
     echo ""
     ok "All datasets ready."
+    echo ""
+    info "Final counts:"
+    info "  Cover:        $(count_images "$COVER_DIR") images"
+    info "  Secret train: $(count_images "$SECRET_TRAIN_DIR") images"
+    info "  Secret test:  $(count_images "$SECRET_TEST_DIR") images"
 }
 
 main "$@"

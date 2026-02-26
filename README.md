@@ -500,13 +500,13 @@ make download
 
 This runs `scripts/download_data.sh`, which downloads:
 - MS-COCO val2017 covers (~1 GB, 5000 images)
-- SpaceNet 2 training imagery from all 4 cities (~56 GB) into `datasets/secret/train/`
-- SpaceNet 2 test imagery from all 4 cities (~19 GB) into `datasets/secret/test/`
+- SpaceNet 2 **MUL-PanSharpen** imagery from all 4 cities into `datasets/secret/train/` and `datasets/secret/test/`, with each city in its own subfolder
 
-The script is idempotent -- it skips datasets that are already present.
+The script is idempotent -- it skips cities that are already present.
 
 **Prerequisites for automatic download:**
-- `curl` and `tar`
+- `curl` and `unzip` (for MS-COCO)
+- [AWS CLI](https://aws.amazon.com/cli/) (for SpaceNet -- downloads via `--no-sign-request`, no account needed)
 
 **Manual alternative:** place your own images directly into `datasets/cover/` and `datasets/secret/train/` / `datasets/secret/test/`.
 
