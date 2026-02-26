@@ -105,6 +105,7 @@ class NexusTrainer:
             list(self.hiding_net.parameters()) + list(self.reveal_net.parameters()),
             lr=1e-4,
             betas=(0.5, 0.999),
+            weight_decay=1e-5,
         )
         self.optimizer_d = optim.Adam(
             self.discriminator.parameters(),
