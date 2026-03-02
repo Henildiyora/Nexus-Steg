@@ -15,19 +15,16 @@ from src.engine.trainer import NexusTrainer
 
 
 def set_seed(seed=42):
-    """
-    Fix random seed for reproducibility.
-    """
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
 
 
 class NexusApp:
-    def __init__(self, epochs=100, batch_size=None, checkpoint_every=10, patience=15):
+    def __init__(self, epochs=100, batch_size=None, checkpoint_every=10, patience=15,
+                 num_workers=None):
         self.device_mgr = DeviceManager()
         self.device = self.device_mgr.device
         self.epochs = epochs
@@ -37,7 +34,7 @@ class NexusApp:
         if batch_size is None:
             batch_size = 64 if self.device_mgr.is_cuda else 4
 
-        self.pipeline = DataPipeline(batch_size=batch_size)
+        self.pipeline = DataPipeline(batch_size=batch_size, num_workers=num_workers)
         self.train_loader, self.val_loader = self.pipeline.get_train_val_loaders(
             cover_dir="datasets/cover",
             secret_dir="datasets/secret/MUL-PanSharpen",
@@ -304,6 +301,8 @@ def main():
                         help="Run sanity checks only (verify losses + visualize inputs)")
     parser.add_argument("--overfit_one_batch", action="store_true",
                         help="Train on a single batch for 200 steps to verify model capacity")
+    parser.add_argument("--num_workers", type=int, default=None,
+                        help="DataLoader workers (default: auto, use 2 for Colab)")
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -313,6 +312,7 @@ def main():
         batch_size=args.batch_size,
         checkpoint_every=args.checkpoint_every,
         patience=args.patience,
+        num_workers=args.num_workers,
     )
 
     if args.sanity:

@@ -80,9 +80,10 @@ class StegoDataset(Dataset):
         return cover, secret
 
 class DataPipeline:
-    def __init__(self, batch_size=16):
+    def __init__(self, batch_size=16, num_workers=None):
         self.batch_size = batch_size
         self.device_manager = DeviceManager()
+        self._num_workers_override = num_workers
         self.train_transform = transforms.Compose(
             [
                 transforms.Resize((256, 256)),
@@ -124,7 +125,11 @@ class DataPipeline:
         train_set.dataset.transform = self.train_transform
         val_set.dataset.transform = self.test_transform
 
-        workers = self.device_manager.get_optimal_workers()
+        if self._num_workers_override is not None:
+            workers = self._num_workers_override
+        else:
+            workers = self.device_manager.get_optimal_workers()
+        persist = workers > 0
         print(
             f"Dataset split: {len(train_indices)} train / {len(val_indices)} val  "
             f"({workers} workers)"
@@ -136,6 +141,7 @@ class DataPipeline:
             shuffle=True,
             num_workers=workers,
             pin_memory=self.device_manager.is_cuda,
+            persistent_workers=persist,
         )
         val_loader = DataLoader(
             val_set,
@@ -143,5 +149,6 @@ class DataPipeline:
             shuffle=False,
             num_workers=workers,
             pin_memory=self.device_manager.is_cuda,
+            persistent_workers=persist,
         )
         return train_loader, val_loader
