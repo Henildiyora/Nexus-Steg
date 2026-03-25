@@ -175,11 +175,11 @@ class NexusApp:
                 elif epoch < 60:
                     phase = 2
                     self.trainer.recovery_weight = 20.0
-                    self.trainer.adv_weight = 0.01
+                    self.trainer.adv_weight = 0.05
                 else:
                     phase = 3
                     self.trainer.recovery_weight = 30.0
-                    self.trainer.adv_weight = 0.05
+                    self.trainer.adv_weight = 0.1
 
                 self.hiding_net.train()
                 self.reveal_net.train()

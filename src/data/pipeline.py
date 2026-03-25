@@ -52,14 +52,11 @@ class StegoDataset(Dataset):
             if secret_path.lower().endswith((".tif", ".tiff")):
                 img = tiff.imread(secret_path)
 
-                # Handle 16-bit satellite stretching with a zero-division guard
                 if img.dtype == np.uint16:
                     p2, p98 = np.percentile(img, (2, 98))
-                    # Use max() with a small epsilon to prevent dividing by zero
                     img = np.clip(img, p2, p98)
                     img = ((img - p2) / max(p98 - p2, 1e-6) * 255).astype(np.uint8)
-                
-                # Ensure correct channel format
+
                 if len(img.shape) == 3:
                     if img.shape[0] < img.shape[2]:
                         img = img.transpose(1, 2, 0)
@@ -79,18 +76,37 @@ class StegoDataset(Dataset):
 
         return cover, secret
 
+
+class TransformSubset(Dataset):
+    """Wraps a Subset with its own transform so train/val don't share state."""
+
+    def __init__(self, subset, transform):
+        self.subset = subset
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.subset)
+
+    def __getitem__(self, index):
+        cover, secret = self.subset[index]
+        if self.transform:
+            cover = self.transform(cover)
+            secret = self.transform(secret)
+        return cover, secret
+
+
 class DataPipeline:
     def __init__(self, batch_size=16, num_workers=None):
         self.batch_size = batch_size
         self.device_manager = DeviceManager()
         self._num_workers_override = num_workers
+
         self.train_transform = transforms.Compose(
             [
                 transforms.Resize((256, 256)),
                 transforms.RandomHorizontalFlip(),
                 transforms.RandomVerticalFlip(),
                 transforms.RandomRotation(15),
-                transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.2, hue=0.1),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
             ]
@@ -107,6 +123,7 @@ class DataPipeline:
     def get_train_val_loaders(self, cover_dir, secret_dir, val_split=0.2, seed=42):
         """
         Build one dataset and split it into non-overlapping train/val sets.
+        Uses TransformSubset so train and val have independent transforms.
         """
         dataset = StegoDataset(cover_dir, secret_dir, transform=None)
         total = len(dataset)
@@ -119,11 +136,8 @@ class DataPipeline:
         val_indices = indices[:split]
         train_indices = indices[split:]
 
-        train_set = Subset(dataset, train_indices)
-        val_set = Subset(dataset, val_indices)
-
-        train_set.dataset.transform = self.train_transform
-        val_set.dataset.transform = self.test_transform
+        train_set = TransformSubset(Subset(dataset, train_indices), self.train_transform)
+        val_set = TransformSubset(Subset(dataset, val_indices), self.test_transform)
 
         if self._num_workers_override is not None:
             workers = self._num_workers_override

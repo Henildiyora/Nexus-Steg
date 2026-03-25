@@ -109,12 +109,12 @@ class NexusTrainer:
         )
         self.optimizer_d = optim.Adam(
             self.discriminator.parameters(),
-            lr=1e-4,
+            lr=5e-5,
             betas=(0.5, 0.999),
         )
 
-        self.scheduler_g = CosineAnnealingLR(self.optimizer_g, T_max=total_epochs, eta_min=1e-6)
-        self.scheduler_d = CosineAnnealingLR(self.optimizer_d, T_max=total_epochs, eta_min=1e-6)
+        self.scheduler_g = CosineAnnealingLR(self.optimizer_g, T_max=total_epochs, eta_min=1e-5)
+        self.scheduler_d = CosineAnnealingLR(self.optimizer_d, T_max=total_epochs, eta_min=5e-6)
 
         self.mse_loss = nn.MSELoss()
         self.bce_loss = nn.BCEWithLogitsLoss()
@@ -124,6 +124,8 @@ class NexusTrainer:
         self.ssim_calc = SSIMCalculator(device=self.device)
         self.recovery_weight = 5.0
         self.adv_weight = 0.0
+        self._global_step = 0
+        self.d_train_every = 2
 
     def step_schedulers(self):
         self.scheduler_g.step()
@@ -133,32 +135,45 @@ class NexusTrainer:
         return list(self.hiding_net.parameters()) + list(self.reveal_net.parameters())
 
     def train_step(self, cover, secret, phase=1, scaler=None):
-        # Discriminator Step
-        self.optimizer_d.zero_grad()
+        self._global_step += 1
 
-        with torch.no_grad():
-            stego_detach = self.hiding_net(cover, secret).detach()
+        # Discriminator Step (every d_train_every steps)
+        train_d = (self._global_step % self.d_train_every == 0)
+        if train_d:
+            self.optimizer_d.zero_grad()
 
-        d_real = self.discriminator(cover)
-        d_fake = self.discriminator(stego_detach)
+            with torch.no_grad():
+                stego_detach = self.hiding_net(cover, secret).detach()
 
-        real_label = torch.ones_like(d_real)
-        fake_label = torch.zeros_like(d_fake)
+            d_real = self.discriminator(cover)
+            d_fake = self.discriminator(stego_detach)
 
-        loss_d = 0.5 * (
-            self.bce_loss(d_real, real_label) + self.bce_loss(d_fake, fake_label)
-        )
+            real_label = torch.ones_like(d_real) * 0.9
+            fake_label = torch.zeros_like(d_fake) + 0.1
 
-        if scaler is not None:
-            scaler.scale(loss_d).backward()
-            scaler.unscale_(self.optimizer_d)
-            nn.utils.clip_grad_norm_(self.discriminator.parameters(), max_norm=1.0)
-            scaler.step(self.optimizer_d)
-            scaler.update()
+            loss_d = 0.5 * (
+                self.bce_loss(d_real, real_label) + self.bce_loss(d_fake, fake_label)
+            )
+
+            if scaler is not None:
+                scaler.scale(loss_d).backward()
+                scaler.unscale_(self.optimizer_d)
+                nn.utils.clip_grad_norm_(self.discriminator.parameters(), max_norm=1.0)
+                scaler.step(self.optimizer_d)
+                scaler.update()
+            else:
+                loss_d.backward()
+                nn.utils.clip_grad_norm_(self.discriminator.parameters(), max_norm=1.0)
+                self.optimizer_d.step()
         else:
-            loss_d.backward()
-            nn.utils.clip_grad_norm_(self.discriminator.parameters(), max_norm=1.0)
-            self.optimizer_d.step()
+            with torch.no_grad():
+                stego_detach = self.hiding_net(cover, secret).detach()
+                d_real = self.discriminator(cover)
+                d_fake = self.discriminator(stego_detach)
+                loss_d = 0.5 * (
+                    self.bce_loss(d_real, torch.ones_like(d_real) * 0.9)
+                    + self.bce_loss(d_fake, torch.zeros_like(d_fake) + 0.1)
+                )
 
         # ---- Generator Step ----
         self.optimizer_g.zero_grad(set_to_none=True)
@@ -167,18 +182,23 @@ class NexusTrainer:
         stego_noised = self.noise_layer(stego) if phase > 1 else stego
         revealed = self.reveal_net(stego_noised)
 
-        # Multi-Objective Loss
+        # Invisibility loss (stego vs cover)
         l_inv = self.mse_loss(stego, cover) + \
                 0.1 * self.perceptual_loss(stego, cover) + \
                 0.1 * self.fft_loss(stego, cover)
-        l_rec = F.mse_loss(revealed, secret)
-        
-        # Adversarial Loss 
+
+        # Recovery loss: MSE + SSIM + perceptual for sharp, structured output
+        ssim_rec = self.ssim_calc(revealed, secret)
+        l_rec = F.mse_loss(revealed, secret) \
+              + 0.5 * (1.0 - ssim_rec) \
+              + 0.1 * self.perceptual_loss(revealed, secret)
+
+        # Adversarial loss
         l_adv = 0
         if phase >= 2:
             d_fake_for_g = self.discriminator(stego)
             l_adv = self.bce_loss(d_fake_for_g, torch.ones_like(d_fake_for_g))
-        
+
         total_loss = l_inv + self.recovery_weight * l_rec + self.adv_weight * l_adv
 
         if scaler is not None:

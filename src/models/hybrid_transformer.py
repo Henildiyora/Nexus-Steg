@@ -99,7 +99,7 @@ class HidingNetwork(nn.Module):
         self.dec2 = ResidualBlock(128 + 128, 64)   # dec3_out + skip2
         self.dec1 = ResidualBlock(64 + 64, 64)     # dec2_out + skip1
         self.final = nn.Conv2d(64, 3, kernel_size=1)
-        self.alpha = nn.Parameter(torch.tensor(0.4))
+        self.alpha = nn.Parameter(torch.tensor(0.5))
 
     def forward(self, cover, secret):
         x = torch.cat([cover, secret], dim=1)
@@ -119,7 +119,7 @@ class HidingNetwork(nn.Module):
         x = self.dec1(torch.cat([x, s1], dim=1))
 
         residual = torch.tanh(self.final(x))
-        return cover + self.alpha.clamp(0.1, 0.8) * residual
+        return cover + self.alpha.clamp(0.25, 0.8) * residual
 
 
 class RevealNetwork(nn.Module):
