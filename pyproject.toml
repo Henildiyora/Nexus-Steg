@@ -9,5 +9,12 @@ dependencies = [
     "tifffile>=2026.2.16",
     "torch>=2.10.0",
     "torchvision>=0.25.0",
+    "torchviz>=0.0.3",
     "tqdm>=4.67.3",
+]
+
+[project.optional-dependencies]
+viz = [
+    "torchviz",
+    "graphviz",
 ]

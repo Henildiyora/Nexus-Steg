@@ -21,6 +21,9 @@ AOI_3_Paris_Train/
 checkpoints/
 results/
 
+# Makefile stamps
+.stamps/
+
 # OS
 .DS_Store
 Thumbs.db

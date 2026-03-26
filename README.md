@@ -2,379 +2,143 @@
 
 **A Robust Semantic-Texture Hybrid Steganography System**
 
-Nexus-Steg treats image steganography as a *digital camouflage* problem rather than simple pixel manipulation. It combines a U-Net encoder with Vision Transformer attention, adversarial steganalysis training, and differentiable noise simulation to hide secret images inside cover images in a way that survives JPEG compression, blur, and AI-based detection.
-
-<!-- ![Nexus-Steg Architecture](assets/architecture_diagram.png) -->
+Nexus-Steg hides secret images inside cover images using a U-Net + Vision Transformer encoder with CBAM attention, adversarial steganalysis training, and differentiable noise simulation. The stego image survives JPEG compression, blur, resize, and AI-based detection.
 
 ---
 
-## Table of Contents
+## Quick Start
 
-- [How It Works (30-Second Version)](#how-it-works-30-second-version)
-- [Architecture Deep Dive](#architecture-deep-dive)
-  - [Full Pipeline](#full-pipeline)
-  - [HidingNetwork (Encoder)](#hidingnetwork-encoder)
-  - [RevealNetwork (Decoder)](#revealnetwork-decoder)
-  - [Differentiable Noise Layer](#differentiable-noise-layer)
-  - [Steganalysis Discriminator (The Sentry)](#steganalysis-discriminator-the-sentry)
-  - [Training Loop](#training-loop)
-  - [Loss Functions](#loss-functions)
-- [Project Structure](#project-structure)
-- [Setup & Installation](#setup--installation)
-  - [Prerequisites](#prerequisites)
-  - [macOS (Apple Silicon)](#macos-apple-silicon)
-  - [Windows (NVIDIA GPU)](#windows-nvidia-gpu)
-- [Dataset Preparation](#dataset-preparation)
-- [Training](#training)
-- [Understanding the Output](#understanding-the-output)
-- [Metrics](#metrics)
-- [Key Design Decisions](#key-design-decisions)
+```bash
+# 1. Clone and install
+git clone https://github.com/Henildiyora/Nexus-Steg.git
+cd Nexus-Steg
+uv sync
 
----
+# 2. Place your images
+#    datasets/cover/          <- cover images (PNG/JPG)
+#    datasets/secret/MUL-PanSharpen/  <- secret images (TIFF/PNG/JPG)
 
-## How It Works (30-Second Version)
+# 3. Run sanity check first (always)
+python main.py --sanity
 
-```mermaid
-flowchart LR
-    Cover["Cover Image\n(innocent photo)"] --> Encoder
-    Secret["Secret Image\n(classified blueprint)"] --> Encoder
-    Encoder["Hiding\nNetwork"] --> Stego["Stego Image\n(looks identical\nto cover)"]
-    Stego --> Noise["Real-World\nDistortion\n(JPEG, blur...)"]
-    Noise --> Decoder["Reveal\nNetwork"]
-    Decoder --> Recovered["Recovered\nSecret Image"]
-```
+# 4. Test model capacity
+python main.py --overfit_one_batch
 
-**The cover image goes in looking normal. The secret image is woven into its texture. The stego image comes out looking identical to the original cover -- but it carries a hidden payload that can be extracted even after JPEG compression.**
+# 5. Train
+python main.py --epochs 100
 
----
-
-## Architecture Deep Dive
-
-### Full Pipeline
-
-This is the complete data flow during training. During inference, the noise layer is bypassed.
-
-```mermaid
-flowchart TB
-    subgraph inputs ["INPUT"]
-        C["Cover Image\n3 x 256 x 256"]
-        S["Secret Image\n3 x 256 x 256"]
-    end
-
-    subgraph encoder ["HIDING NETWORK (U-Net + ViT)"]
-        CAT["Concatenate\n6 x 256 x 256"]
-        E1["ResBlock Enc1\n64 x 256 x 256"]
-        E2["ResBlock Enc2\n128 x 128 x 128"]
-        E3["ResBlock Enc3\n256 x 64 x 64"]
-        VIT["ViT Bottleneck\n256 x 32 x 32\n(1024 tokens)"]
-        D3["ResBlock Dec3\n128 x 64 x 64"]
-        D2["ResBlock Dec2\n64 x 128 x 128"]
-        D1["ResBlock Dec1\n64 x 256 x 256"]
-        FINAL_E["Conv 1x1 + tanh\n3 x 256 x 256"]
-    end
-
-    subgraph middle ["ROBUSTNESS TRAINING"]
-        NL["Differentiable\nNoise Layer"]
-    end
-
-    subgraph sentry ["ADVERSARIAL SENTRY"]
-        DISC["Steganalysis\nDiscriminator"]
-        VERDICT["Real or Fake?"]
-    end
-
-    subgraph decoder ["REVEAL NETWORK (U-Net + ViT)"]
-        RE1["ResBlock Enc1\n64 x 256 x 256"]
-        RE2["ResBlock Enc2\n128 x 128 x 128"]
-        RE3["ResBlock Enc3\n256 x 64 x 64"]
-        RVIT["ViT Bottleneck\n256 x 32 x 32"]
-        RD3["ResBlock Dec3\n128 x 64 x 64"]
-        RD2["ResBlock Dec2\n64 x 128 x 128"]
-        RD1["ResBlock Dec1\n64 x 256 x 256"]
-        FINAL_D["Conv 1x1 + tanh\n3 x 256 x 256"]
-    end
-
-    subgraph outputs ["OUTPUT"]
-        STEGO["Stego Image\n3 x 256 x 256"]
-        REVEALED["Recovered Secret\n3 x 256 x 256"]
-    end
-
-    C --> CAT
-    S --> CAT
-    CAT --> E1
-    E1 -->|"pool 2x"| E2
-    E2 -->|"pool 2x"| E3
-    E3 -->|"pool 2x"| VIT
-
-    VIT -->|"upsample 2x"| D3
-    E3 -.->|"skip concat"| D3
-    D3 -->|"upsample 2x"| D2
-    E2 -.->|"skip concat"| D2
-    D2 -->|"upsample 2x"| D1
-    E1 -.->|"skip concat"| D1
-    D1 --> FINAL_E
-
-    FINAL_E --> STEGO
-    STEGO --> NL
-    STEGO --> DISC
-    C --> DISC
-    DISC --> VERDICT
-
-    NL --> RE1
-    RE1 -->|"pool 2x"| RE2
-    RE2 -->|"pool 2x"| RE3
-    RE3 -->|"pool 2x"| RVIT
-    RVIT -->|"upsample 2x"| RD3
-    RE3 -.->|"skip concat"| RD3
-    RD3 -->|"upsample 2x"| RD2
-    RE2 -.->|"skip concat"| RD2
-    RD2 -->|"upsample 2x"| RD1
-    RE1 -.->|"skip concat"| RD1
-    RD1 --> FINAL_D
-    FINAL_D --> REVEALED
+# 6. Evaluate
+python evaluate.py --checkpoint checkpoints/nexus_best.pth
 ```
 
 ---
 
-### HidingNetwork (Encoder)
+## What's New in This Branch
 
-The encoder takes a **cover image** and a **secret image**, both 256x256 RGB, and produces a **stego image** that looks identical to the cover but contains the hidden secret.
+This update applies Karpathy's "A Recipe for Training Neural Networks" to make training reproducible, debuggable, and robust:
 
-```
-COVER IMAGE (3ch)                SECRET IMAGE (3ch)
-     |                                |
-     +------------- CAT -------------+
-                     |
-                 6 x 256 x 256
-                     |
-            +--------+--------+
-            |  ResBlock Enc1  |  -----> skip1 (64 x 256 x 256) -------+
-            |   6 -> 64 ch   |                                        |
-            +--------+--------+                                        |
-                     | MaxPool 2x                                      |
-                 64 x 128 x 128                                        |
-                     |                                                 |
-            +--------+--------+                                        |
-            |  ResBlock Enc2  |  -----> skip2 (128 x 128 x 128) --+   |
-            |  64 -> 128 ch  |                                    |   |
-            +--------+--------+                                    |   |
-                     | MaxPool 2x                                  |   |
-                128 x 64 x 64                                      |   |
-                     |                                             |   |
-            +--------+--------+                                    |   |
-            |  ResBlock Enc3  |  -----> skip3 (256 x 64 x 64) -+  |   |
-            | 128 -> 256 ch  |                                 |  |   |
-            +--------+--------+                                 |  |   |
-                     | MaxPool 2x                               |  |   |
-                256 x 32 x 32                                   |  |   |
-                     |                                          |  |   |
-        +------------+------------+                             |  |   |
-        |     ViT BOTTLENECK      |                             |  |   |
-        |  flatten -> 1024 tokens |                             |  |   |
-        |  Multi-Head Attention   |  <-- Global semantic        |  |   |
-        |  (8 heads, dim=256)     |      understanding          |  |   |
-        |  MLP (256 -> 1024 ->256)|                             |  |   |
-        |  reshape -> 256x32x32   |                             |  |   |
-        +------------+------------+                             |  |   |
-                     |                                          |  |   |
-                     | Upsample 2x                              |  |   |
-                256 x 64 x 64                                   |  |   |
-                     |                                          |  |   |
-                     +--- CONCAT with skip3 --> 512 x 64 x 64  |  |   |
-                     |                          +               |  |   |
-            +--------+--------+                                 |  |   |
-            |  ResBlock Dec3  |                                    |   |
-            | 512 -> 128 ch  |                                    |   |
-            +--------+--------+                                    |   |
-                     | Upsample 2x                                 |   |
-                128 x 128 x 128                                    |   |
-                     |                                             |   |
-                     +--- CONCAT with skip2 --> 256 x 128 x 128   |   |
-                     |                          +                      |
-            +--------+--------+                                        |
-            |  ResBlock Dec2  |                                        |
-            | 256 -> 64 ch   |                                        |
-            +--------+--------+                                        |
-                     | Upsample 2x                                     |
-                 64 x 256 x 256                                        |
-                     |                                                 |
-                     +--- CONCAT with skip1 --> 128 x 256 x 256       |
-                     |                          +
-            +--------+--------+
-            |  ResBlock Dec1  |
-            | 128 -> 64 ch   |
-            +--------+--------+
-                     |
-            +--------+--------+
-            |  Conv 1x1 + tanh |
-            |   64 -> 3 ch    |
-            +--------+--------+
-                     |
-             STEGO IMAGE (3ch)
-           (looks like the cover,
-            but carries the secret)
-```
-
-**Why this design?**
-
-| Component | What It Does |
-|---|---|
-| **ResidualBlock** | Two 3x3 convolutions with BatchNorm + a shortcut connection. Learns local texture patterns (edges, fur, concrete grain) |
-| **U-Net Skip Connections** | Directly pipes high-resolution encoder features to the decoder. Without these, fine details like individual eyelashes or text get destroyed during downsampling |
-| **ViT Bottleneck** | Flattens the 32x32 feature map into 1024 tokens and runs multi-head self-attention. This gives the network *global* awareness -- it understands "this region is a face" and avoids hiding data in perceptually sensitive areas like eyes |
-| **tanh Output** | Constrains the output to [-1, 1], matching the normalized input range |
+| Feature | What It Does |
+|---------|-------------|
+| **Reproducibility seeds** | `torch.manual_seed(42)` + numpy + random + cudnn deterministic. Same results every run. |
+| **`--sanity` mode** | Verifies initial losses match expected values and saves input visualization before training |
+| **`--overfit_one_batch`** | Trains on 1 batch for 200 steps to verify the model has enough capacity |
+| **Weight decay** | `1e-5` on generator optimizer to prevent weight explosion |
+| **Early stopping** | Stops training if PSNR(secret) doesn't improve for 15 epochs. Saves best checkpoint. |
+| **CSV logging** | Writes all metrics to `results/training_log.csv` every epoch for easy plotting |
+| **CLI arguments** | All settings configurable via command line (`--epochs`, `--batch_size`, `--patience`, `--seed`) |
 
 ---
 
-### RevealNetwork (Decoder)
+## Step-by-Step Training Guide
 
-The reveal network mirrors the hiding network. It takes the stego image (3 channels) and extracts the hidden secret. Same U-Net + ViT architecture, but with 3 input channels instead of 6.
+### Step 1: Sanity Check
 
-```mermaid
-flowchart TB
-    STEGO["Stego Image\n3 x 256 x 256"] --> RE1
-
-    RE1["Enc1: 3->64\n256x256"] -->|"pool"| RE2["Enc2: 64->128\n128x128"]
-    RE2 -->|"pool"| RE3["Enc3: 128->256\n64x64"]
-    RE3 -->|"pool"| RVIT["ViT Bottleneck\n256ch, 32x32\n1024 tokens"]
-
-    RVIT -->|"upsample"| RD3["Dec3: 512->128\n64x64"]
-    RE3 -.->|"skip"| RD3
-    RD3 -->|"upsample"| RD2["Dec2: 256->64\n128x128"]
-    RE2 -.->|"skip"| RD2
-    RD2 -->|"upsample"| RD1["Dec1: 128->64\n256x256"]
-    RE1 -.->|"skip"| RD1
-
-    RD1 --> FINAL["Conv1x1 + tanh\n3 x 256 x 256"]
-    FINAL --> SECRET["Recovered Secret"]
+```bash
+python main.py --sanity
 ```
 
----
+**What to check:**
 
-### Differentiable Noise Layer
+| Output | Expected | Problem If Wrong |
+|--------|----------|-----------------|
+| Cover range | `[-1.000, 1.000]` | Data normalization broken |
+| Secret range | `[-1.000, 1.000]` | TIFF loading broken |
+| `l_inv` | 0.01 - 0.10 | Encoder init is off |
+| `l_rec` | 0.30 - 0.70 | Reveal network is off |
+| `l_disc` | ~0.693 | Discriminator init is off |
 
-This is inserted **between the encoder and decoder during training only**. It simulates real-world image degradation so the decoder learns to recover secrets even from corrupted stego images.
+Also open `results/sanity_inputs.png` -- you should see real cover images (top row) and secret images (bottom row). If they look garbled, the data pipeline has a bug.
 
-```mermaid
-flowchart LR
-    STEGO["Stego Image"] --> CHOICE{"Random\nSelection"}
-    CHOICE -->|"14%"| ID["Identity\n(no change)"]
-    CHOICE -->|"14%"| J50["JPEG Q=50\n(heavy compression)"]
-    CHOICE -->|"14%"| J90["JPEG Q=90\n(light compression)"]
-    CHOICE -->|"14%"| BLUR["Gaussian Blur\nsigma 0.5-2.0"]
-    CHOICE -->|"14%"| NOISE["Gaussian Noise\nstd 0.01-0.05"]
-    CHOICE -->|"14%"| DROP["Pixel Dropout\n5-15% pixels"]
-    CHOICE -->|"14%"| COMBO["JPEG Q=90\n+ Gaussian Noise"]
+### Step 2: Overfit One Batch
 
-    ID --> OUT["Distorted\nStego Image"]
-    J50 --> OUT
-    J90 --> OUT
-    BLUR --> OUT
-    NOISE --> OUT
-    DROP --> OUT
-    COMBO --> OUT
+```bash
+python main.py --overfit_one_batch
 ```
 
-Each distortion uses a **straight-through estimator** so gradients can flow back through the non-differentiable quantization steps. During inference (eval mode), this layer becomes an identity pass-through.
+**What to check:**
 
----
+- **PASS** (loss < 0.01): Model has sufficient capacity. Proceed to training.
+- **WARN** (loss 0.01 - 0.10): Likely fine but monitor recovery during training.
+- **FAIL** (loss > 0.10): Architecture or learning rate problem. Do not proceed.
 
-### Steganalysis Discriminator (The Sentry)
+### Step 3: Train
 
-The Sentry is trained to detect whether an image contains hidden data. It plays a zero-sum game against the encoder -- as the Sentry gets better at detecting, the encoder evolves to hide better.
+```bash
+# Colab / A100 / H100:
+python main.py --epochs 100 --batch_size 64
 
-```mermaid
-flowchart TB
-    INPUT["Image\n3 x 256 x 256"] --> PREP
+# Mac (MPS):
+python main.py --epochs 100 --batch_size 4
 
-    subgraph prep ["HIGH-PASS PREPROCESSING"]
-        PREP["Conv 5x5\n(SRM filter init)\n3 -> 16 channels"]
-    end
-
-    subgraph features ["FEATURE EXTRACTION"]
-        B1["SRNetBlock\n16 -> 32"]
-        P1["AvgPool 2x\n128x128"]
-        B2["SRNetBlock\n32 -> 64"]
-        P2["AvgPool 2x\n64x64"]
-        B3["SRNetBlock\n64 -> 128"]
-        P3["AvgPool 2x\n32x32"]
-        B4["SRNetBlock\n128 -> 256"]
-        GAP["AdaptiveAvgPool\n1x1"]
-    end
-
-    subgraph classifier ["CLASSIFIER"]
-        FC1["Linear 256->128\nLeakyReLU"]
-        FC2["Linear 128->1"]
-    end
-
-    PREP --> B1 --> P1 --> B2 --> P2 --> B3 --> P3 --> B4 --> GAP
-    GAP --> FC1 --> FC2
-
-    FC2 --> RESULT["Score:\n0 = Cover (clean)\n1 = Stego (has secret)"]
+# All options:
+python main.py --epochs 100 --batch_size 64 --patience 15 --checkpoint_every 10 --seed 42
 ```
 
-The first layer is initialized with **SRM (Spatial Rich Model) high-pass filters** -- the same kernels used in professional steganalysis forensics. This forces the discriminator to look at pixel-level residuals rather than image content, making it a much harder adversary.
+Training runs in 3 phases automatically:
 
----
+| Phase | Epochs | What Happens | What to Watch |
+|-------|--------|-------------|---------------|
+| **1** | 0-29 | Pure hiding/recovery, no noise, no adversarial | `rec` should drop steadily. PSNR(secret) should climb to 25-30dB. |
+| **2** | 30-59 | Noise layer ON, adversarial ON (mild) | PSNR(secret) will drop at epoch 30 (normal!), then recover over ~10 epochs. |
+| **3** | 60-99 | Full adversarial pressure, max recovery weight | Metrics should plateau. `disc` near 0.693 means stego is undetectable. |
 
-### Training Loop
+**Target metrics at end of training:**
 
-```mermaid
-sequenceDiagram
-    participant D as Discriminator
-    participant E as Encoder (HidingNet)
-    participant N as Noise Layer
-    participant R as Decoder (RevealNet)
-    participant L as Loss Functions
+| Metric | Minimum | Good | Excellent |
+|--------|---------|------|-----------|
+| PSNR(stego) | > 30dB | > 33dB | > 36dB |
+| SSIM(stego) | > 0.90 | > 0.95 | > 0.97 |
+| PSNR(secret) | > 24dB | > 28dB | > 32dB |
+| SSIM(secret) | > 0.55 | > 0.70 | > 0.85 |
+| disc | 0.60-0.75 | 0.65-0.72 | ~0.693 |
 
-    Note over D,L: === Each Training Step ===
+**Red flags during training:**
+- `rec` stays at 0.000 --> network is not learning to recover the secret
+- PSNR(secret) > 50dB in early epochs --> network is outputting the secret directly (not hiding anything)
+- `disc` drops below 0.3 and stays --> discriminator is winning, stego images are too obvious
+- Metrics flat for 15 epochs --> early stopping will trigger automatically
 
-    rect rgb(40, 40, 60)
-    Note over D: Step 1: Train Discriminator
-    E->>D: Generate stego (detached, no grad)
-    D->>D: Score real covers -> should be 1
-    D->>D: Score stego images -> should be 0
-    D->>L: BCE Loss on both
-    L-->>D: Update discriminator weights
-    end
+### Step 4: Check Outputs
 
-    rect rgb(40, 60, 40)
-    Note over E,R: Step 2: Train Generator (Encoder + Decoder)
-    E->>E: Generate stego from cover + secret
-    E->>N: Pass stego through noise
-    N->>R: Distorted stego to decoder
-    R->>R: Extract revealed secret
+**Visual results:** Open `results/epoch_N.png` -- each image shows `[cover | secret | stego | revealed]` side by side. Cover and stego should look identical. Secret and revealed should look similar by epoch 50+.
 
-    E->>L: MSE(stego, cover) -- invisibility
-    E->>L: VGG Perceptual(stego, cover) -- style match
-    R->>L: MSE(revealed, secret) -- recovery
-    E->>D: Score stego -> should fool into 1
-    D->>L: Adversarial loss
+**Training log:** Open `results/training_log.csv` to plot training curves. Columns: epoch, phase, train_loss, l_inv, l_rec, l_disc, val_psnr_stego, val_ssim_stego, val_psnr_secret, val_ssim_secret, lr.
 
-    L-->>E: Update encoder weights
-    L-->>R: Update decoder weights
-    end
+**Best checkpoint:** `checkpoints/nexus_best.pth` is automatically saved whenever PSNR(secret) improves.
 
-    Note over D,L: Repeat for all batches, then step LR schedulers
+### Step 5: Evaluate
+
+```bash
+python evaluate.py --checkpoint checkpoints/nexus_best.pth
 ```
 
----
+Runs 8 attack tests (JPEG-90, JPEG-50, blur, noise, resize, social media simulation, steganalysis detection) and produces a PASS/WARN/FAIL report with visual evidence saved to `results/evaluation/`.
 
-### Loss Functions
-
-The total generator loss combines four objectives:
-
+```bash
+# Test on completely unseen images:
+python evaluate.py --checkpoint checkpoints/nexus_best.pth \
+    --cover_dir path/to/new/covers --secret_dir path/to/new/secrets
 ```
-Total Loss = L_invisibility + 5.0 * L_recovery + 0.01 * L_adversarial
-```
-
-| Loss | Formula | Purpose | Weight |
-|---|---|---|---|
-| **MSE Invisibility** | `MSE(stego, cover)` | Pixel-level similarity between stego and cover | 1.0 |
-| **VGG Perceptual** | `MSE(VGG(stego), VGG(cover))` | High-level feature similarity (textures, style) | 0.1 |
-| **MSE Recovery** | `MSE(revealed, secret)` | Accurate extraction of the hidden secret | 5.0 |
-| **Adversarial** | `BCE(D(stego), 1)` | Fool the steganalysis discriminator | 0.01 |
-
-The VGG perceptual loss properly converts from the training range [-1, 1] to ImageNet normalization before computing features, ensuring meaningful style comparison.
 
 ---
 
@@ -382,208 +146,100 @@ The VGG perceptual loss properly converts from the training range [-1, 1] to Ima
 
 ```
 nexus-steg/
-├── main.py                          # Entry point -- training orchestration
-├── pyproject.toml                   # Dependencies and project metadata
+├── main.py                  # Training entry point (sanity, overfit, train modes)
+├── evaluate.py              # Post-training evaluation test suite (8 attack scenarios)
+├── visualize_arch.py        # Generate torchviz computational graphs
 ├── src/
-│   ├── core/
-│   │   └── device.py                # Hardware detection (CUDA / MPS / CPU)
-│   ├── data/
-│   │   └── pipeline.py              # Dataset loading, TIFF support, transforms
-│   ├── engine/
-│   │   └── trainer.py               # Training loop, losses, validation, metrics
+│   ├── core/device.py       # Hardware detection (CUDA / MPS / CPU)
+│   ├── data/pipeline.py     # Dataset loading, TIFF support, train/val split
+│   ├── engine/trainer.py    # Training loop, losses, validation, metrics
 │   └── models/
-│       ├── hybrid_transformer.py    # HidingNetwork + RevealNetwork (U-Net + ViT)
-│       ├── noise_layer.py           # Differentiable JPEG, blur, noise, dropout
-│       └── discriminator.py         # SRNet-inspired steganalysis discriminator
+│       ├── hybrid_transformer.py  # HidingNetwork + RevealNetwork (U-Net + ViT + CBAM)
+│       ├── noise_layer.py         # Differentiable JPEG, blur, noise, dropout, resize
+│       └── discriminator.py       # SRNet-inspired steganalysis discriminator
 ├── datasets/
-│   ├── cover/                       # Place cover images here (PNG/JPG)
-│   └── secret/
-│       ├── MUL-PanSharpen/          # Place secret images here (TIFF/PNG/JPG)
-│       └── geojson/buildings/       # SpaceNet GeoJSON annotations
-├── checkpoints/                     # Saved model weights per epoch
-├── results/                         # Visual comparison images per epoch
-└── AOI_3_Paris_Train/               # SpaceNet Paris metadata
+│   ├── cover/               # Cover images (PNG/JPG)
+│   └── secret/MUL-PanSharpen/  # Secret images (TIFF/PNG/JPG)
+├── checkpoints/             # Saved model weights
+└── results/                 # Visual outputs, training_log.csv, evaluation reports
 ```
 
 ---
 
-## Setup & Installation
+## CLI Reference
 
-### Prerequisites
+```bash
+# Full training
+python main.py --epochs 100 --batch_size 64 --checkpoint_every 10 --patience 15 --seed 42
+
+# Sanity check only
+python main.py --sanity
+
+# Overfit one batch only
+python main.py --overfit_one_batch
+
+# Evaluate trained model
+python evaluate.py --checkpoint checkpoints/nexus_best.pth
+python evaluate.py --checkpoint checkpoints/nexus_epoch_99.pth --cover_dir path/to/covers --secret_dir path/to/secrets
+```
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--epochs` | 100 | Number of training epochs |
+| `--batch_size` | auto (64 CUDA, 4 MPS) | Batch size |
+| `--checkpoint_every` | 10 | Save checkpoint every N epochs |
+| `--patience` | 15 | Early stopping patience |
+| `--seed` | 42 | Random seed for reproducibility |
+| `--sanity` | off | Run sanity checks only |
+| `--overfit_one_batch` | off | Run capacity test only |
+
+---
+
+## Architecture Overview
+
+```
+Cover (3ch) + Secret (3ch)
+        |
+    [CONCAT -> 6ch]
+        |
+    U-Net Encoder (ResBlock+CBAM at each level)
+    64 -> 128 -> 256 channels, pooling 2x at each step
+        |
+    ViT Bottleneck (256ch, 32x32 = 1024 tokens, 8-head attention)
+        |
+    U-Net Decoder (skip connections from encoder)
+    256 -> 128 -> 64 channels, upsample 2x at each step
+        |
+    Conv 1x1 + tanh -> residual
+        |
+    Stego = Cover + alpha * residual     (alpha is learnable, starts at 0.4)
+        |
+    [Noise Layer - training only]         (JPEG, blur, resize, noise, dropout)
+        |
+    Reveal Network (same U-Net + ViT architecture, 3ch input)
+        |
+    Recovered Secret (3ch)
+```
+
+---
+
+## Dataset Recommendations
+
+| Size | Training Pairs | Effect |
+|------|---------------|--------|
+| 1,000 | 800 | Model memorizes textures. Poor generalization. |
+| 5,000 | 4,000 | Minimum viable. Learns basic patterns. |
+| **10,000** | **8,000** | **Sweet spot. Strong generalization for this architecture.** |
+| 50,000+ | 40,000+ | Diminishing returns. Only for production. |
+
+Cover images: [MS-COCO](https://cocodataset.org/) train2017 or val2017.
+Secret images: [SpaceNet](https://spacenet.ai/) satellite TIFF, or any other images.
+
+---
+
+## Requirements
 
 - Python 3.11+
-- [uv](https://docs.astral.sh/uv/) package manager (recommended) or pip
-- **macOS**: Apple Silicon Mac (M1/M2/M3/M4) -- uses MPS acceleration
-- **Windows**: NVIDIA GPU with CUDA 12+ -- uses CUDA acceleration
-- **CPU**: Works on any machine (slower training)
-
-### macOS (Apple Silicon)
-
-```bash
-# Clone the repository
-git clone <repo-url> nexus-steg
-cd nexus-steg
-
-# Create virtual environment and install dependencies
-uv sync
-
-# Verify MPS is available
-uv run python -c "import torch; print('MPS:', torch.backends.mps.is_available())"
-```
-
-### Windows (NVIDIA GPU)
-
-```bash
-# Clone the repository
-git clone <repo-url> nexus-steg
-cd nexus-steg
-
-# Create virtual environment and install dependencies
-uv sync
-
-# Verify CUDA is available
-uv run python -c "import torch; print('CUDA:', torch.cuda.is_available())"
-```
-
-**Alternative (pip):**
-
-```bash
-python -m venv .venv
-
-# macOS / Linux
-source .venv/bin/activate
-
-# Windows
-.venv\Scripts\activate
-
-pip install torch torchvision tqdm pillow tifffile
-```
-
----
-
-## Dataset Preparation
-
-You need two sets of images:
-
-| Folder | What Goes Here | Recommended Source |
-|---|---|---|
-| `datasets/cover/` | Natural photographs (the "innocent" carriers) | [MS-COCO](https://cocodataset.org/) val2017 or train2017 |
-| `datasets/secret/MUL-PanSharpen/` | The images to hide (satellite imagery, blueprints, etc.) | [SpaceNet](https://spacenet.ai/) Paris MUL-PanSharpen TIFF files |
-
-**Quick start with MS-COCO covers:**
-
-```bash
-# Download COCO val2017 (about 1GB, 5000 images)
-mkdir -p datasets/cover
-cd datasets/cover
-curl -O http://images.cocodataset.org/zips/val2017.zip
-unzip val2017.zip
-mv val2017/* .
-rmdir val2017
-rm val2017.zip
-cd ../..
-```
-
-**For SpaceNet secrets**, download the Paris AOI_3 MUL-PanSharpen images from [SpaceNet on AWS](https://spacenet.ai/datasets/) and place the `.tif` files in `datasets/secret/MUL-PanSharpen/`.
-
-> Both folders must contain at least 1 image each. The pipeline supports `.png`, `.jpg`, `.jpeg`, `.tif`, and `.tiff` formats.
-
----
-
-## Training
-
-```bash
-# Run training (100 epochs by default)
-uv run python main.py
-
-# Or with the venv directly
-.venv/bin/python main.py        # macOS / Linux
-.venv\Scripts\python main.py    # Windows
-```
-
-**What happens when you run it:**
-
-1. Hardware auto-detection (CUDA > MPS > CPU)
-2. Dataset loading and validation
-3. Training with live progress bars showing loss values
-4. Per-epoch validation with PSNR and SSIM metrics
-5. Visual comparisons saved to `results/epoch_N.png`
-6. Full checkpoints saved to `checkpoints/nexus_epoch_N.pth`
-
-**Example output:**
-
-```
-CUDA is available. Using GPU.
-Cover path: .../datasets/cover | Found: 5000 images
-Secret path: .../datasets/secret/MUL-PanSharpen | Found: 1000 images
-Starting Nexus-Steg Training on cuda
-
-Epoch 0/100: 100%|████████████████| 500/500 [02:31, loss=3.4521, inv=1.2340, rec=0.4436, disc=0.6931]
-  Val | PSNR(stego): 24.31dB  SSIM(stego): 0.8821  PSNR(secret): 18.42dB  SSIM(secret): 0.7103
-
-Epoch 50/100: 100%|████████████████| 500/500 [02:28, loss=0.8912, inv=0.3201, rec=0.1142, disc=0.5823]
-  Val | PSNR(stego): 35.67dB  SSIM(stego): 0.9712  PSNR(secret): 30.21dB  SSIM(secret): 0.9534
-```
-
----
-
-## Understanding the Output
-
-### Visual Results (`results/epoch_N.png`)
-
-Each saved image is a side-by-side strip of four images:
-
-```
-┌──────────┬──────────┬──────────┬──────────┐
-│  Cover   │  Secret  │  Stego   │ Revealed │
-│(original)│ (hidden) │ (output) │(extracted)│
-└──────────┴──────────┴──────────┴──────────┘
-```
-
-- **Cover vs. Stego** should look nearly identical (high PSNR = good hiding)
-- **Secret vs. Revealed** shows how well the decoder recovers the hidden image
-
-### Checkpoints (`checkpoints/nexus_epoch_N.pth`)
-
-Each checkpoint contains:
-
-```python
-{
-    "epoch": 50,
-    "hiding_net": ...,       # Encoder weights
-    "reveal_net": ...,       # Decoder weights
-    "discriminator": ...,    # Sentry weights
-    "optimizer_g": ...,      # Generator optimizer state (for resuming)
-    "optimizer_d": ...,      # Discriminator optimizer state
-    "scheduler_g": ...,      # LR scheduler state
-    "scheduler_d": ...,
-    "scaler": ...,           # AMP scaler state
-}
-```
-
----
-
-## Metrics
-
-| Metric | What It Measures | Good Value |
-|---|---|---|
-| **PSNR (stego)** | How similar the stego image is to the cover (pixel-level) | > 33 dB |
-| **SSIM (stego)** | Structural similarity between stego and cover | > 0.95 |
-| **PSNR (secret)** | How accurately the secret is recovered | > 28 dB |
-| **SSIM (secret)** | Structural similarity of recovered vs. original secret | > 0.90 |
-| **Disc Loss** | Discriminator's ability to detect stego (~0.69 = fooled) | ~0.5 - 0.7 |
-
----
-
-## Key Design Decisions
-
-| Problem | Common Approach | Nexus-Steg Solution |
-|---|---|---|
-| JPEG destroys the hidden data | Ignore it | **Differentiable JPEG Layer** trained directly into the loss function with straight-through estimator |
-| Color shifts in stego image | Simple L2 loss | **VGG-16 Perceptual Loss** with proper ImageNet normalization for natural color/texture preservation |
-| AI steganalysis detects the secret | No defense | **Adversarial training** against an SRNet-inspired discriminator with SRM high-pass filter initialization |
-| Fine details lost in bottleneck | Basic encoder-decoder | **U-Net skip connections** at 3 resolution levels preserving full spatial detail |
-| CNN misses global image context | Pure CNN | **Vision Transformer bottleneck** with multi-head self-attention over 1024 spatial tokens |
-| Training instability with GAN + ViT | Hope for the best | **Gradient clipping** (max_norm=1.0), **spectral normalization**, and **cosine LR annealing** |
-| Slow training | Wait a week | **Mixed-precision (AMP)** on CUDA with GradScaler for ~2x speedup |
-| Mac vs Windows compatibility | Pick one | **Auto-detection**: CUDA on Windows, MPS on Apple Silicon, CPU fallback |
+- PyTorch 2.10+
+- CUDA (recommended), MPS (Mac), or CPU
+- See `pyproject.toml` for full dependency list

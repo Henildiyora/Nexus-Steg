@@ -75,13 +75,30 @@ class PixelDropout(nn.Module):
         mask = (torch.rand(x.shape[0], 1, x.shape[2], x.shape[3], device=x.device) > p).float()
         return x * mask
 
+class RandomResizing(nn.Module):
+    """
+    Simulates the downsampling and upsampling artifacts of social media.
+    This is critical for surviving WhatsApp/Telegram compression.
+    """
+    def __init__(self, scale_range=(0.5, 0.9)):
+        super().__init__()
+        self.scale_range = scale_range
+
+    def forward(self, x):
+        orig_size = x.shape[2:]
+        # Randomly choose a scale factor (e.g., 256px -> 128px)
+        scale = random.uniform(*self.scale_range)
+        new_size = (int(orig_size[0] * scale), int(orig_size[1] * scale))
+        
+        # Downsample then Upsample back to original size
+        down = F.interpolate(x, size=new_size, mode='bilinear', align_corners=False)
+        return F.interpolate(down, size=orig_size, mode='bilinear', align_corners=False)
 
 class DifferentiableNoiseLayer(nn.Module):
     """
-    Randomly applies one distortion during training to force the decoder
-    to learn robust extraction. Disabled during eval (identity pass-through).
+    Randomly applies distortions to force the decoder to learn robust extraction.
+    Updated for Phase 4 robustness including resizing artifacts.
     """
-
     def __init__(self):
         super().__init__()
         self.jpeg_50 = DiffJPEG(quality=50)
@@ -89,13 +106,16 @@ class DifferentiableNoiseLayer(nn.Module):
         self.blur = GaussianBlur()
         self.noise = GaussianNoise()
         self.dropout = PixelDropout()
+        self.resizing = RandomResizing() # New Phase 4 Component
 
     def forward(self, x):
         if not self.training:
             return x
 
+        # Added 'resizing' and 'extreme_combo' for higher impact
         distortion = random.choice([
-            "identity", "jpeg_50", "jpeg_90", "blur", "noise", "dropout", "combined"
+            "identity", "jpeg_50", "jpeg_90", "blur", "noise", 
+            "dropout", "resizing", "combined", "extreme_combo"
         ])
 
         if distortion == "identity":
@@ -110,5 +130,9 @@ class DifferentiableNoiseLayer(nn.Module):
             return self.noise(x)
         elif distortion == "dropout":
             return self.dropout(x)
-        else:  # combined: JPEG + noise
+        elif distortion == "resizing":
+            return self.resizing(x)
+        elif distortion == "combined": # JPEG + noise
             return self.noise(self.jpeg_90(x))
+        else: # extreme_combo: Resizing + JPEG + Noise
+            return self.noise(self.jpeg_50(self.resizing(x)))
