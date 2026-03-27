@@ -47,7 +47,7 @@ EVAL_REPORT := $(RESULTS)/evaluation/report.txt
 STAMP_INSTALL   := $(STAMPS)/.installed
 STAMP_COCO_VAL  := $(STAMPS)/.coco_val2017
 STAMP_COCO_TEST := $(STAMPS)/.coco_test2017
-SN2_STAMPS      := $(foreach city,$(AOIS),$(STAMPS)/.sn2_$(city))
+SN2_STAMPS := $(foreach city,$(AOIS),$(STAMPS)/.sn2_$(city))
 
 # Build NUM_WORKERS flag only if set
 ifdef NUM_WORKERS
@@ -147,15 +147,15 @@ $(STAMP_COCO_TEST): | $(STAMPS)
 secrets: $(SN2_STAMPS)
 	@echo "[OK] Secret images ready in $(SECRET_DIR)/"
 
-# Generic rule: aws s3 sync MUL-PanSharpen TIFFs for each city (no account needed)
+# Generic rule: aws s3 cp PS-MS TIFFs for each city (no account needed)
 define SN2_RULE
 $(STAMPS)/.sn2_$(1): | $(STAMPS)
 	@mkdir -p $(SECRET_DIR)
-	@echo "[INFO] Syncing SpaceNet 2 — $(1) MUL-PanSharpen via AWS CLI ..."
-	aws s3 sync \
-		"$(SN2_BUCKET)/train/$(SN2_AOI_$(1))/MUL-PanSharpen/" \
+	@echo "[INFO] Downloading SpaceNet 2 — $(1) train PS-MS via AWS CLI ..."
+	aws s3 cp \
+		"$(SN2_BUCKET)/train/$(SN2_AOI_$(1))/PS-MS/" \
 		"$(SECRET_DIR)/" \
-		--no-sign-request --quiet
+		--recursive --no-sign-request --quiet
 	@touch $$@
 	@echo "[OK] SpaceNet 2 $(1) done."
 endef
@@ -171,7 +171,7 @@ verify: data
 	@echo "  Dataset Verification"
 	@echo "════════════════════════════════════════════════════════"
 	@echo "  Cover images:  $$(find $(COVER_DIR) -type f \( -name '*.jpg' -o -name '*.png' -o -name '*.jpeg' \) 2>/dev/null | wc -l)"
-	@echo "  Secret images: $$(find $(SECRET_DIR) -type f -name '*.tif' 2>/dev/null | wc -l)"
+	@echo "  Secret images: $$(find $(SECRET_DIR) -type f \( -name '*.tif' -o -name '*.tiff' \) 2>/dev/null | wc -l)"
 	@echo "════════════════════════════════════════════════════════"
 
 # ══════════════════════════════════════════════════════════════════════════════
