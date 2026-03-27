@@ -127,9 +127,8 @@ $(STAMP_COCO_VAL): | $(STAMPS)
 	@echo "[INFO] Downloading COCO val2017 (~1 GB, 5,000 images)..."
 	wget -q --show-progress $(COCO_VAL_URL) -O $(TMP_DIR)/val2017.zip
 	@echo "[INFO] Extracting val2017..."
-	unzip -q -o $(TMP_DIR)/val2017.zip -d $(TMP_DIR)/coco_tmp
-	mv $(TMP_DIR)/coco_tmp/val2017/* $(COVER_DIR)/
-	rm -rf $(TMP_DIR)/coco_tmp $(TMP_DIR)/val2017.zip
+	unzip -j -q -o $(TMP_DIR)/val2017.zip -d $(COVER_DIR)/
+	rm -f $(TMP_DIR)/val2017.zip
 	@touch $@
 	@echo "[OK] COCO val2017 done."
 
@@ -138,9 +137,8 @@ $(STAMP_COCO_TEST): | $(STAMPS)
 	@echo "[INFO] Downloading COCO test2017 (~6.2 GB, 40,670 images)..."
 	wget -q --show-progress $(COCO_TEST_URL) -O $(TMP_DIR)/test2017.zip
 	@echo "[INFO] Extracting test2017..."
-	unzip -q -o $(TMP_DIR)/test2017.zip -d $(TMP_DIR)/coco_tmp
-	mv $(TMP_DIR)/coco_tmp/test2017/* $(COVER_DIR)/
-	rm -rf $(TMP_DIR)/coco_tmp $(TMP_DIR)/test2017.zip
+	unzip -j -q -o $(TMP_DIR)/test2017.zip -d $(COVER_DIR)/
+	rm -f $(TMP_DIR)/test2017.zip
 	@touch $@
 	@echo "[OK] COCO test2017 done."
 
