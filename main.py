@@ -23,7 +23,8 @@ def set_seed(seed=42):
 
 
 class NexusApp:
-    def __init__(self, epochs=100, batch_size=None, checkpoint_every=10, patience=15,
+    def __init__(self, epochs=100, batch_size=None, checkpoint_every=10, patience=25,
+                 min_epochs_early_stop=60, early_stop_val_tolerance_db=0.35,
                  num_workers=None, train_dir="datasets/DIV2K_train_HR",
                  val_dir="datasets/DIV2K_valid_HR", no_amp=False):
         self.device_mgr = DeviceManager()
@@ -31,6 +32,8 @@ class NexusApp:
         self.epochs = epochs
         self.checkpoint_every = checkpoint_every
         self.patience = patience
+        self.min_epochs_early_stop = min_epochs_early_stop
+        self.early_stop_val_tolerance_db = early_stop_val_tolerance_db
 
         if batch_size is None:
             batch_size = 16 if self.device_mgr.is_cuda else 4
@@ -137,7 +140,7 @@ class NexusApp:
             pg["lr"] = 1e-3
         for pg in self.trainer.optimizer_d.param_groups:
             pg["lr"] = 5e-4
-        self.trainer.recovery_weight = 10.0
+        self.trainer.recovery_weight = 15.0
 
         for step in range(steps):
             with torch.amp.autocast(device_type=self.device.type, enabled=self.use_amp):
@@ -174,6 +177,14 @@ class NexusApp:
 
     def run(self):
         print(f"Starting Nexus-Steg Training on {self.device}")
+        print(
+            "  Schedule: Phase1 ep0-44 | Phase2a ep45-54 (noise+adv, MSE recovery) | "
+            "Phase2b ep55-74 | Phase3 ep75+"
+        )
+        print(
+            f"  Early stop: patience={self.patience}, min_epoch={self.min_epochs_early_stop}, "
+            f"val_plateau_tol={self.early_stop_val_tolerance_db:.2f} dB"
+        )
 
         csv_path = "results/training_log.csv"
         csv_file = open(csv_path, "w", newline="")
@@ -189,16 +200,24 @@ class NexusApp:
 
         try:
             for epoch in range(self.epochs):
-                if epoch < 30:
+                if epoch < 45:
                     phase = 1
-                    self.trainer.recovery_weight = 10.0
+                    recovery_aux = True
+                    self.trainer.recovery_weight = 15.0
                     self.trainer.adv_weight = 0.0
-                elif epoch < 60:
+                elif epoch < 55:
                     phase = 2
-                    self.trainer.recovery_weight = 20.0
+                    recovery_aux = False
+                    self.trainer.recovery_weight = 14.0
+                    self.trainer.adv_weight = 0.05
+                elif epoch < 75:
+                    phase = 2
+                    recovery_aux = True
+                    self.trainer.recovery_weight = 18.0
                     self.trainer.adv_weight = 0.05
                 else:
                     phase = 3
+                    recovery_aux = True
                     self.trainer.recovery_weight = 30.0
                     self.trainer.adv_weight = 0.1
 
@@ -210,7 +229,10 @@ class NexusApp:
                 pbar = tqdm(
                     enumerate(self.train_loader),
                     total=len(self.train_loader),
-                    desc=f"Epoch {epoch}/{self.epochs} (Phase {phase})",
+                    desc=(
+                        f"Epoch {epoch}/{self.epochs} (P{phase}"
+                        f"{'+aux' if recovery_aux and phase == 2 else ''})"
+                    ),
                 )
 
                 for i, (cover, secret) in pbar:
@@ -223,6 +245,7 @@ class NexusApp:
                             secret,
                             phase=phase,
                             scaler=self.scaler if self.use_amp else None,
+                            recovery_aux=recovery_aux,
                         )
 
                     total_loss += loss
@@ -266,9 +289,10 @@ class NexusApp:
                 if sample is not None:
                     self.save_visual_results(epoch, *sample)
 
-                # Early stopping
-                if metrics["psnr_secret"] > best_psnr_secret:
-                    best_psnr_secret = metrics["psnr_secret"]
+                ps = metrics["psnr_secret"]
+                tol = self.early_stop_val_tolerance_db
+                if ps > best_psnr_secret:
+                    best_psnr_secret = ps
                     epochs_without_improvement = 0
                     best_ckpt = {
                         "epoch": epoch,
@@ -282,12 +306,18 @@ class NexusApp:
                         "scaler": self.scaler.state_dict(),
                     }
                     torch.save(best_ckpt, "checkpoints/nexus_best.pth")
+                elif ps >= best_psnr_secret - tol:
+                    pass
                 else:
                     epochs_without_improvement += 1
-                    if epochs_without_improvement >= self.patience:
+                    if (
+                        (epoch + 1) >= self.min_epochs_early_stop
+                        and epochs_without_improvement >= self.patience
+                    ):
                         print(
                             f"\n  Early stopping: no improvement in PSNR(secret) for "
-                            f"{self.patience} epochs. Best: {best_psnr_secret:.2f}dB"
+                            f"{self.patience} epochs (after epoch {self.min_epochs_early_stop}). "
+                            f"Best: {best_psnr_secret:.2f}dB"
                         )
                         break
 
@@ -315,13 +345,19 @@ def main():
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=None)
     parser.add_argument("--checkpoint_every", type=int, default=10)
-    parser.add_argument("--patience", type=int, default=15,
-                        help="Early stopping patience (epochs without improvement)")
+    parser.add_argument("--patience", type=int, default=25,
+                        help="Early stopping patience (epochs without PSNR(secret) improvement)")
+    parser.add_argument("--min_epochs_early_stop", type=int, default=60,
+                        help="No early stopping before this epoch")
+    parser.add_argument(
+        "--early_stop_val_tolerance_db", type=float, default=0.35,
+        help="Val PSNR(secret) within this dB of best does not advance no-improvement counter",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--sanity", action="store_true",
                         help="Run sanity checks only (verify losses + visualize inputs)")
     parser.add_argument("--overfit_one_batch", action="store_true",
-                        help="Train on a single batch for 200 steps to verify model capacity")
+                        help="Train on a single batch (500 steps) to verify model capacity")
     parser.add_argument("--num_workers", type=int, default=None,
                         help="DataLoader workers (default: auto, use 2 for Colab)")
     parser.add_argument("--train_dir", type=str, default="datasets/DIV2K_train_HR",
@@ -339,6 +375,8 @@ def main():
         batch_size=args.batch_size,
         checkpoint_every=args.checkpoint_every,
         patience=args.patience,
+        min_epochs_early_stop=args.min_epochs_early_stop,
+        early_stop_val_tolerance_db=args.early_stop_val_tolerance_db,
         num_workers=args.num_workers,
         train_dir=args.train_dir,
         val_dir=args.val_dir,

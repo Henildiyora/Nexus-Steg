@@ -141,7 +141,7 @@ class NexusTrainer:
     def _get_all_generator_params(self):
         return list(self.hiding_net.parameters()) + list(self.reveal_net.parameters())
 
-    def train_step(self, cover, secret, phase=1, scaler=None):
+    def train_step(self, cover, secret, phase=1, scaler=None, recovery_aux=True):
         self._global_step += 1
 
         # Discriminator Step (every d_train_every steps)
@@ -189,14 +189,24 @@ class NexusTrainer:
         stego_noised = self.noise_layer(stego) if phase > 1 else stego
         revealed = self.reveal_net(stego_noised)
 
-        # Invisibility loss (stego vs cover)
-        l_inv = self.mse_loss(stego, cover) + \
-                0.1 * self.perceptual_loss(stego, cover) + \
-                0.1 * self.fft_loss(stego, cover)
+        # Invisibility: lighter perceptual/FFT in phase 1 so embedding can grow.
+        if phase == 1:
+            l_inv = self.mse_loss(stego, cover) + \
+                    0.05 * self.perceptual_loss(stego, cover) + \
+                    0.05 * self.fft_loss(stego, cover)
+        else:
+            l_inv = self.mse_loss(stego, cover) + \
+                    0.1 * self.perceptual_loss(stego, cover) + \
+                    0.1 * self.fft_loss(stego, cover)
 
-        # Recovery loss: plain MSE in phase 1, add SSIM+perceptual in later phases
+        # Recovery: phase 1 = MSE only. Phase 2 can run noise+adv with MSE-only first
+        # (recovery_aux=False) to avoid a huge SSIM spike when secret SSIM is still ~0.2.
         l_rec = F.mse_loss(revealed, secret)
-        if phase >= 2:
+        if phase == 2 and recovery_aux:
+            ssim_rec = self.ssim_calc(revealed, secret)
+            l_rec = l_rec + 0.25 * (1.0 - ssim_rec) \
+                          + 0.05 * self.perceptual_loss(revealed, secret)
+        elif phase >= 3:
             ssim_rec = self.ssim_calc(revealed, secret)
             l_rec = l_rec + 0.5 * (1.0 - ssim_rec) \
                           + 0.1 * self.perceptual_loss(revealed, secret)
