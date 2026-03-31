@@ -121,7 +121,7 @@ class DataPipeline:
             num_workers=workers,
             pin_memory=self.device_manager.is_cuda,
             persistent_workers=persist,
-            drop_last=True,
+            drop_last=False,
             collate_fn=split_batch_collate,
         )
         return train_loader, val_loader
@@ -145,6 +145,6 @@ class DataPipeline:
             num_workers=workers,
             pin_memory=self.device_manager.is_cuda,
             persistent_workers=persist,
-            drop_last=True,
+            drop_last=False,
             collate_fn=split_batch_collate,
         )
