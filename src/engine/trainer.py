@@ -194,11 +194,12 @@ class NexusTrainer:
                 0.1 * self.perceptual_loss(stego, cover) + \
                 0.1 * self.fft_loss(stego, cover)
 
-        # Recovery loss: MSE + SSIM + perceptual for sharp, structured output
-        ssim_rec = self.ssim_calc(revealed, secret)
-        l_rec = F.mse_loss(revealed, secret) \
-              + 0.5 * (1.0 - ssim_rec) \
-              + 0.1 * self.perceptual_loss(revealed, secret)
+        # Recovery loss: plain MSE in phase 1, add SSIM+perceptual in later phases
+        l_rec = F.mse_loss(revealed, secret)
+        if phase >= 2:
+            ssim_rec = self.ssim_calc(revealed, secret)
+            l_rec = l_rec + 0.5 * (1.0 - ssim_rec) \
+                          + 0.1 * self.perceptual_loss(revealed, secret)
 
         # Adversarial loss
         l_adv = 0

@@ -129,6 +129,16 @@ class NexusApp:
         self.hiding_net.train()
         self.reveal_net.train()
 
+        # Use aggressive LR and match phase 1 recovery_weight for the overfit test
+        saved_lr_g = self.trainer.optimizer_g.param_groups[0]["lr"]
+        saved_lr_d = self.trainer.optimizer_d.param_groups[0]["lr"]
+        saved_rw = self.trainer.recovery_weight
+        for pg in self.trainer.optimizer_g.param_groups:
+            pg["lr"] = 1e-3
+        for pg in self.trainer.optimizer_d.param_groups:
+            pg["lr"] = 5e-4
+        self.trainer.recovery_weight = 10.0
+
         for step in range(steps):
             with torch.amp.autocast(device_type=self.device.type, enabled=self.use_amp):
                 loss, l_inv, l_rec, l_disc = self.trainer.train_step(
@@ -141,6 +151,13 @@ class NexusApp:
                     f"  Step {step:3d}/{steps} | "
                     f"loss={loss:.6f}  inv={l_inv:.6f}  rec={l_rec:.6f}  disc={l_disc:.4f}"
                 )
+
+        # Restore original LR and recovery_weight
+        for pg in self.trainer.optimizer_g.param_groups:
+            pg["lr"] = saved_lr_g
+        for pg in self.trainer.optimizer_d.param_groups:
+            pg["lr"] = saved_lr_d
+        self.trainer.recovery_weight = saved_rw
 
         print()
         if loss < 0.01:
