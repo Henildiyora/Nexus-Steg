@@ -348,7 +348,7 @@ def main():
     if args.sanity:
         app.run_sanity()
     elif args.overfit_one_batch:
-        app.run_overfit_one_batch(steps=200)
+        app.run_overfit_one_batch()
     else:
         app.run()
 
