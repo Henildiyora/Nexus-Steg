@@ -24,7 +24,8 @@ def set_seed(seed=42):
 
 class NexusApp:
     def __init__(self, epochs=100, batch_size=None, checkpoint_every=10, patience=15,
-                 num_workers=None):
+                 num_workers=None, train_dir="datasets/DIV2K_train_HR",
+                 val_dir="datasets/DIV2K_valid_HR", no_amp=False):
         self.device_mgr = DeviceManager()
         self.device = self.device_mgr.device
         self.epochs = epochs
@@ -32,13 +33,12 @@ class NexusApp:
         self.patience = patience
 
         if batch_size is None:
-            batch_size = 64 if self.device_mgr.is_cuda else 4
+            batch_size = 16 if self.device_mgr.is_cuda else 4
 
         self.pipeline = DataPipeline(batch_size=batch_size, num_workers=num_workers)
-        self.train_loader, self.val_loader = self.pipeline.get_train_val_loaders(
-            cover_dir="datasets/cover",
-            secret_dir="datasets/secret/MUL-PanSharpen",
-            val_split=0.2,
+        self.train_loader, self.val_loader = self.pipeline.get_loaders(
+            train_dir=train_dir,
+            val_dir=val_dir,
         )
 
         self.hiding_net = HidingNetwork().to(self.device)
@@ -48,10 +48,12 @@ class NexusApp:
             self.hiding_net, self.reveal_net, self.device_mgr, total_epochs=epochs
         )
 
-        self.use_amp = self.device_mgr.is_cuda
+        self.use_amp = self.device_mgr.is_cuda and not no_amp
         self.scaler = torch.amp.GradScaler(
             device=self.device.type, enabled=self.use_amp
         )
+        if no_amp and self.device_mgr.is_cuda:
+            print("  AMP disabled (--no_amp). Training in float32.")
 
         os.makedirs("results", exist_ok=True)
         os.makedirs("checkpoints", exist_ok=True)
@@ -303,6 +305,12 @@ def main():
                         help="Train on a single batch for 200 steps to verify model capacity")
     parser.add_argument("--num_workers", type=int, default=None,
                         help="DataLoader workers (default: auto, use 2 for Colab)")
+    parser.add_argument("--train_dir", type=str, default="datasets/DIV2K_train_HR",
+                        help="Training images directory")
+    parser.add_argument("--val_dir", type=str, default="datasets/DIV2K_valid_HR",
+                        help="Validation images directory")
+    parser.add_argument("--no_amp", action="store_true",
+                        help="Disable mixed precision (use for GPUs without Tensor cores, e.g. GTX 1660 Ti)")
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -313,6 +321,9 @@ def main():
         checkpoint_every=args.checkpoint_every,
         patience=args.patience,
         num_workers=args.num_workers,
+        train_dir=args.train_dir,
+        val_dir=args.val_dir,
+        no_amp=args.no_amp,
     )
 
     if args.sanity:

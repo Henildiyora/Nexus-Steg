@@ -2,15 +2,11 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-COVER_DIR="$ROOT_DIR/datasets/cover"
-SECRET_TRAIN_DIR="$ROOT_DIR/datasets/secret/train"
-SECRET_TEST_DIR="$ROOT_DIR/datasets/secret/test"
+TRAIN_DIR="$ROOT_DIR/datasets/DIV2K_train_HR"
+VALID_DIR="$ROOT_DIR/datasets/DIV2K_valid_HR"
 
-COCO_URL="http://images.cocodataset.org/zips/val2017.zip"
-
-S3_BUCKET="s3://spacenet-dataset/spacenet/SN2_buildings"
-
-CITIES=("AOI_2_Vegas" "AOI_3_Paris" "AOI_4_Shanghai" "AOI_5_Khartoum")
+DIV2K_TRAIN_URL="http://data.vision.ee.ethz.ch/cvl/DIV2K/DIV2K_train_HR.zip"
+DIV2K_VALID_URL="http://data.vision.ee.ethz.ch/cvl/DIV2K/DIV2K_valid_HR.zip"
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -25,108 +21,59 @@ need_cmd() {
 
 count_images() {
     find "$1" -type f \
-        \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' \
-           -o -iname '*.tif' -o -iname '*.tiff' \) 2>/dev/null | wc -l
+        \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' \) 2>/dev/null | wc -l
 }
 
-# ── MS-COCO val2017 (cover images) ──────────────────────────────────────────
+# ── DIV2K download ───────────────────────────────────────────────────────────
 
-download_coco() {
-    info "Checking cover images in $COVER_DIR ..."
-    mkdir -p "$COVER_DIR"
+download_div2k_split() {
+    local name="$1" url="$2" dest_dir="$3"
 
-    existing=$(count_images "$COVER_DIR")
-    if [ "$existing" -ge 100 ]; then
-        ok "Cover directory already has $existing images — skipping download."
-        return
+    info "Checking $name images in $dest_dir ..."
+
+    if [ -d "$dest_dir" ]; then
+        existing=$(count_images "$dest_dir")
+        if [ "$existing" -ge 10 ]; then
+            ok "$name already has $existing images — skipping download."
+            return
+        fi
     fi
 
-    need_cmd curl
+    need_cmd wget
     need_cmd unzip
 
-    local zip_path="$ROOT_DIR/datasets/val2017.zip"
+    local zip_name
+    zip_name="$(basename "$url")"
+    local zip_path="$ROOT_DIR/datasets/$zip_name"
 
-    info "Downloading MS-COCO val2017 (~1 GB) ..."
-    curl -L --progress-bar -o "$zip_path" "$COCO_URL"
+    mkdir -p "$ROOT_DIR/datasets"
 
-    info "Extracting to $COVER_DIR ..."
+    info "Downloading DIV2K $name (~$([ "$name" = "train" ] && echo '3.3 GB, 800' || echo '0.4 GB, 100') images) ..."
+    wget -q --show-progress "$url" -O "$zip_path"
+
+    info "Extracting $name ..."
     unzip -q -o "$zip_path" -d "$ROOT_DIR/datasets/"
 
-    if [ -d "$ROOT_DIR/datasets/val2017" ]; then
-        mv "$ROOT_DIR/datasets/val2017"/* "$COVER_DIR/" 2>/dev/null || true
-        rmdir "$ROOT_DIR/datasets/val2017" 2>/dev/null || true
-    fi
-
     rm -f "$zip_path"
-    ok "Cover images ready ($(count_images "$COVER_DIR") files)."
-}
-
-# ── SpaceNet 2 — MUL-PanSharpen only, all 4 cities ─────────────────────────
-#
-# S3 layout (no account needed with --no-sign-request):
-#   s3://spacenet-dataset/spacenet/SN2_buildings/train/<CITY>/PS-MS/
-#   s3://spacenet-dataset/spacenet/SN2_buildings/test_public/<CITY>/PS-MS/
-#
-# Local layout:
-#   datasets/secret/train/<CITY>/   ← MUL-PanSharpen TIFs
-#   datasets/secret/test/<CITY>/
-
-download_sn2_city() {
-    local split_name="$1" s3_split="$2" dest_dir="$3" city="$4"
-    local city_dir="$dest_dir/$city"
-
-    mkdir -p "$city_dir"
-
-    existing=$(count_images "$city_dir")
-    if [ "$existing" -ge 10 ]; then
-        ok "$city ($split_name) already has $existing images — skipping."
-        return
-    fi
-
-    local s3_path="$S3_BUCKET/$s3_split/$city/PS-MS/"
-
-    info "Downloading $city $split_name MUL-PanSharpen ..."
-    aws s3 cp "$s3_path" "$city_dir/" \
-        --recursive --no-sign-request --quiet
-
-    ok "$city ($split_name) done — $(count_images "$city_dir") images."
-}
-
-download_sn2() {
-    need_cmd aws
-
-    info "Downloading SpaceNet 2 MUL-PanSharpen (4 cities, train + test) ..."
-    echo ""
-
-    for city in "${CITIES[@]}"; do
-        download_sn2_city "train" "train" "$SECRET_TRAIN_DIR" "$city"
-    done
-
-    echo ""
-
-    for city in "${CITIES[@]}"; do
-        download_sn2_city "test" "test_public" "$SECRET_TEST_DIR" "$city"
-    done
+    ok "DIV2K $name ready ($(count_images "$dest_dir") images in $dest_dir/)."
 }
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 main() {
-    info "Nexus-Steg dataset download"
-    info "SpaceNet 2 — Vegas, Paris, Shanghai, Khartoum (MUL-PanSharpen)"
+    info "Nexus-Steg dataset download — DIV2K (train + valid)"
     echo ""
 
-    download_coco
+    download_div2k_split "train" "$DIV2K_TRAIN_URL" "$TRAIN_DIR"
     echo ""
-    download_sn2
+    download_div2k_split "valid" "$DIV2K_VALID_URL" "$VALID_DIR"
 
     echo ""
     ok "All datasets ready."
     echo ""
     info "Final counts:"
-    info "  Cover:        $(count_images "$COVER_DIR") images"
-    info "  Secret train: $(count_images "$SECRET_TRAIN_DIR") images"
-    info "  Secret test:  $(count_images "$SECRET_TEST_DIR") images"
+    info "  Train: $(count_images "$TRAIN_DIR") images"
+    info "  Valid: $(count_images "$VALID_DIR") images"
 }
 
 main "$@"

@@ -7,36 +7,23 @@
 PYTHON           ?= python
 PIP              ?= pip
 EPOCHS           ?= 100
-BATCH_SIZE       ?= 64
+BATCH_SIZE       ?= 16
 PATIENCE         ?= 15
 CHECKPOINT_EVERY ?= 10
 SEED             ?= 42
 NUM_WORKERS      ?=
 
-# SpaceNet 2 cities to download (space-separated, subset to save disk)
-#   All four: Vegas Paris Shanghai Khartoum  (~56 GB download, ~10k images)
-#   Minimal:  Vegas Paris                    (~28 GB download, ~5k images)
-AOIS ?= Vegas Paris Shanghai Khartoum
-
 # ── Directories ──────────────────────────────────────────────────────────────
-COVER_DIR  := datasets/cover
-SECRET_DIR := datasets/secret/MUL-PanSharpen
+TRAIN_DIR  := datasets/DIV2K_train_HR
+VAL_DIR    := datasets/DIV2K_valid_HR
 RESULTS    := results
 CKPT_DIR   := checkpoints
 STAMPS     := .stamps
 TMP_DIR    := /tmp/nexus-steg-dl
 
 # ── URLs ─────────────────────────────────────────────────────────────────────
-COCO_VAL_URL  := http://images.cocodataset.org/zips/val2017.zip
-COCO_TEST_URL := http://images.cocodataset.org/zips/test2017.zip
-
-SN2_BUCKET := s3://spacenet-dataset/spacenet/SN2_buildings
-
-# AOI city → S3 path component
-SN2_AOI_Vegas    := AOI_2_Vegas
-SN2_AOI_Paris    := AOI_3_Paris
-SN2_AOI_Shanghai := AOI_4_Shanghai
-SN2_AOI_Khartoum := AOI_5_Khartoum
+DIV2K_TRAIN_URL := http://data.vision.ee.ethz.ch/cvl/DIV2K/DIV2K_train_HR.zip
+DIV2K_VALID_URL := http://data.vision.ee.ethz.ch/cvl/DIV2K/DIV2K_valid_HR.zip
 
 # ── Derived paths ────────────────────────────────────────────────────────────
 BEST_CKPT   := $(CKPT_DIR)/nexus_best.pth
@@ -44,10 +31,9 @@ TRAIN_LOG   := $(RESULTS)/training_log.csv
 EVAL_REPORT := $(RESULTS)/evaluation/report.txt
 
 # Stamp files (track completed steps, avoid redundant work)
-STAMP_INSTALL   := $(STAMPS)/.installed
-STAMP_COCO_VAL  := $(STAMPS)/.coco_val2017
-STAMP_COCO_TEST := $(STAMPS)/.coco_test2017
-SN2_STAMPS := $(foreach city,$(AOIS),$(STAMPS)/.sn2_$(city))
+STAMP_INSTALL    := $(STAMPS)/.installed
+STAMP_DIV2K_TRAIN := $(STAMPS)/.div2k_train
+STAMP_DIV2K_VALID := $(STAMPS)/.div2k_valid
 
 # Build NUM_WORKERS flag only if set
 ifdef NUM_WORKERS
@@ -57,7 +43,7 @@ else
 endif
 
 # ── Phony targets ────────────────────────────────────────────────────────────
-.PHONY: all install data covers secrets verify health sanity overfit train \
+.PHONY: all install data verify health sanity overfit train \
         evaluate plot clean clean-data clean-stamps clean-all help
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -73,9 +59,7 @@ help:
 	@echo "═══════════════════════════════════════════════════════════════"
 	@echo ""
 	@echo "  make install       Install project (pip install -e .)"
-	@echo "  make data          Download all datasets (covers + secrets)"
-	@echo "  make covers        Download COCO val2017 + test2017 covers"
-	@echo "  make secrets       Download SpaceNet 2 satellite secrets"
+	@echo "  make data          Download DIV2K dataset (train + valid)"
 	@echo "  make verify        Count images in dataset directories"
 	@echo "  make health        Run architecture health check"
 	@echo "  make sanity        Run sanity check (verify initial losses)"
@@ -92,11 +76,9 @@ help:
 	@echo ""
 	@echo "Configuration (override via CLI):"
 	@echo "  EPOCHS=$(EPOCHS)  BATCH_SIZE=$(BATCH_SIZE)  PATIENCE=$(PATIENCE)"
-	@echo "  AOIS=\"$(AOIS)\""
 	@echo ""
 	@echo "Examples:"
 	@echo "  make train EPOCHS=50 BATCH_SIZE=32"
-	@echo "  make data AOIS=\"Vegas Paris\""
 	@echo "  make all NUM_WORKERS=4"
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -111,56 +93,31 @@ $(STAMP_INSTALL): pyproject.toml | $(STAMPS)
 	@echo "[OK] Dependencies installed."
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 2. Download datasets
+# 2. Download DIV2K dataset
 # ══════════════════════════════════════════════════════════════════════════════
 
-data: covers secrets
-	@echo "[OK] All datasets downloaded."
+data: $(STAMP_DIV2K_TRAIN) $(STAMP_DIV2K_VALID)
+	@echo "[OK] DIV2K dataset ready."
 
-# ── COCO cover images (val2017 + test2017 → ~46,000 images) ─────────────────
-
-covers: $(STAMP_COCO_VAL) $(STAMP_COCO_TEST)
-	@echo "[OK] Cover images ready in $(COVER_DIR)/"
-
-$(STAMP_COCO_VAL): | $(STAMPS)
-	@mkdir -p $(COVER_DIR) $(TMP_DIR)
-	@echo "[INFO] Downloading COCO val2017 (~1 GB, 5,000 images)..."
-	wget -q --show-progress $(COCO_VAL_URL) -O $(TMP_DIR)/val2017.zip
-	@echo "[INFO] Extracting val2017..."
-	unzip -j -q -o $(TMP_DIR)/val2017.zip -d $(COVER_DIR)/
-	rm -f $(TMP_DIR)/val2017.zip
+$(STAMP_DIV2K_TRAIN): | $(STAMPS)
+	@mkdir -p datasets $(TMP_DIR)
+	@echo "[INFO] Downloading DIV2K train HR (~3.3 GB, 800 images)..."
+	wget -q --show-progress $(DIV2K_TRAIN_URL) -O $(TMP_DIR)/DIV2K_train_HR.zip
+	@echo "[INFO] Extracting DIV2K train..."
+	unzip -q -o $(TMP_DIR)/DIV2K_train_HR.zip -d datasets/
+	rm -f $(TMP_DIR)/DIV2K_train_HR.zip
 	@touch $@
-	@echo "[OK] COCO val2017 done."
+	@echo "[OK] DIV2K train done (800 images in $(TRAIN_DIR)/)."
 
-$(STAMP_COCO_TEST): | $(STAMPS)
-	@mkdir -p $(COVER_DIR) $(TMP_DIR)
-	@echo "[INFO] Downloading COCO test2017 (~6.2 GB, 40,670 images)..."
-	wget -q --show-progress $(COCO_TEST_URL) -O $(TMP_DIR)/test2017.zip
-	@echo "[INFO] Extracting test2017..."
-	unzip -j -q -o $(TMP_DIR)/test2017.zip -d $(COVER_DIR)/
-	rm -f $(TMP_DIR)/test2017.zip
+$(STAMP_DIV2K_VALID): | $(STAMPS)
+	@mkdir -p datasets $(TMP_DIR)
+	@echo "[INFO] Downloading DIV2K valid HR (~0.4 GB, 100 images)..."
+	wget -q --show-progress $(DIV2K_VALID_URL) -O $(TMP_DIR)/DIV2K_valid_HR.zip
+	@echo "[INFO] Extracting DIV2K valid..."
+	unzip -q -o $(TMP_DIR)/DIV2K_valid_HR.zip -d datasets/
+	rm -f $(TMP_DIR)/DIV2K_valid_HR.zip
 	@touch $@
-	@echo "[OK] COCO test2017 done."
-
-# ── SpaceNet 2 secret images (satellite TIFFs via AWS CLI) ───────────────────
-
-secrets: $(SN2_STAMPS)
-	@echo "[OK] Secret images ready in $(SECRET_DIR)/"
-
-# Generic rule: aws s3 cp PS-MS TIFFs for each city (no account needed)
-define SN2_RULE
-$(STAMPS)/.sn2_$(1): | $(STAMPS)
-	@mkdir -p $(SECRET_DIR)
-	@echo "[INFO] Downloading SpaceNet 2 — $(1) train PS-MS via AWS CLI ..."
-	aws s3 cp \
-		"$(SN2_BUCKET)/train/$(SN2_AOI_$(1))/PS-MS/" \
-		"$(SECRET_DIR)/" \
-		--recursive --no-sign-request --quiet
-	@touch $$@
-	@echo "[OK] SpaceNet 2 $(1) done."
-endef
-
-$(foreach city,$(AOIS),$(eval $(call SN2_RULE,$(city))))
+	@echo "[OK] DIV2K valid done (100 images in $(VAL_DIR)/)."
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 3. Verify datasets
@@ -170,8 +127,8 @@ verify: data
 	@echo "════════════════════════════════════════════════════════"
 	@echo "  Dataset Verification"
 	@echo "════════════════════════════════════════════════════════"
-	@echo "  Cover images:  $$(find $(COVER_DIR) -type f \( -name '*.jpg' -o -name '*.png' -o -name '*.jpeg' \) 2>/dev/null | wc -l)"
-	@echo "  Secret images: $$(find $(SECRET_DIR) -type f \( -name '*.tif' -o -name '*.tiff' \) 2>/dev/null | wc -l)"
+	@echo "  Train images: $$(find $(TRAIN_DIR) -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' \) 2>/dev/null | wc -l)"
+	@echo "  Valid images: $$(find $(VAL_DIR) -type f \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' \) 2>/dev/null | wc -l)"
 	@echo "════════════════════════════════════════════════════════"
 
 # ══════════════════════════════════════════════════════════════════════════════

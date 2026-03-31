@@ -10,12 +10,7 @@ wheels/
 .venv/
 
 # Datasets (too large for git)
-datasets.zip
-datasets/cover/*
-datasets/secret/MUL-PanSharpen/*
-datasets/secret/geojson/
-AOI_3_Paris_Train/
-!datasets/cover/.gitkeep
+datasets/*
 
 # Training artifacts
 checkpoints/

@@ -6,7 +6,6 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "pillow>=12.1.1",
-    "tifffile>=2026.2.16",
     "torch>=2.10.0",
     "torchvision>=0.25.0",
     "torchviz>=0.0.3",

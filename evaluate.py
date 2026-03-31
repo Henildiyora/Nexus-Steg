@@ -6,7 +6,7 @@ model robustness. Produces a pass/fail report and saves visual evidence.
 
 Usage:
     python evaluate.py --checkpoint checkpoints/nexus_epoch_99.pth
-    python evaluate.py --checkpoint checkpoints/nexus_epoch_99.pth --cover_dir path/to/covers --secret_dir path/to/secrets
+    python evaluate.py --checkpoint checkpoints/nexus_epoch_99.pth --val_dir path/to/val_images
 """
 
 import argparse
@@ -78,7 +78,7 @@ def attack_social_media(stego_tensor):
 # ── Evaluation engine ──
 
 class Evaluator:
-    def __init__(self, checkpoint_path, device_mgr, cover_dir, secret_dir):
+    def __init__(self, checkpoint_path, device_mgr, val_dir):
         self.device = device_mgr.device
         self.ssim = SSIMCalculator(device=self.device)
 
@@ -100,9 +100,7 @@ class Evaluator:
         self.discriminator.eval()
 
         pipeline = DataPipeline(batch_size=8)
-        _, self.val_loader = pipeline.get_train_val_loaders(
-            cover_dir, secret_dir, val_split=0.2
-        )
+        self.val_loader = pipeline.get_val_loader(val_dir)
 
         self.out_dir = "results/evaluation"
         os.makedirs(self.out_dir, exist_ok=True)
@@ -294,16 +292,13 @@ def main():
         "--checkpoint", type=str, required=True, help="Path to .pth checkpoint"
     )
     parser.add_argument(
-        "--cover_dir", type=str, default="datasets/cover", help="Cover images directory"
-    )
-    parser.add_argument(
-        "--secret_dir", type=str, default="datasets/secret/MUL-PanSharpen",
-        help="Secret images directory",
+        "--val_dir", type=str, default="datasets/DIV2K_valid_HR",
+        help="Validation images directory",
     )
     args = parser.parse_args()
 
     dm = DeviceManager()
-    evaluator = Evaluator(args.checkpoint, dm, args.cover_dir, args.secret_dir)
+    evaluator = Evaluator(args.checkpoint, dm, args.val_dir)
     evaluator.run_all()
 
 

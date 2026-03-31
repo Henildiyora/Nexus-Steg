@@ -1,3 +1,5 @@
+import warnings
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -12,10 +14,10 @@ from src.models.discriminator import SteganalysisDiscriminator
 class FFTLoss(nn.Module):
     """Penalizes spectral discrepancies to survive JPEG/WhatsApp."""
     def forward(self, x, y):
-
-        fx = torch.fft.rfft2(x)
-        fy = torch.fft.rfft2(y)
-        return F.l1_loss(torch.abs(fx), torch.abs(fy))
+        with torch.amp.autocast(device_type=x.device.type, enabled=False):
+            fx = torch.fft.rfft2(x.float())
+            fy = torch.fft.rfft2(y.float())
+            return F.l1_loss(torch.abs(fx), torch.abs(fy))
 
 class VGGPerceptualLoss(nn.Module):
     """
@@ -46,7 +48,10 @@ class VGGPerceptualLoss(nn.Module):
         return (x - self.mean) / self.std
 
     def forward(self, x, y):
-        return self.mse(self.vgg(self._normalize(x)), self.vgg(self._normalize(y)))
+        with torch.amp.autocast(device_type=x.device.type, enabled=False):
+            x32 = self._normalize(x.float())
+            y32 = self._normalize(y.float())
+            return self.mse(self.vgg(x32), self.vgg(y32))
 
 
 def compute_psnr(img1, img2):
@@ -128,8 +133,10 @@ class NexusTrainer:
         self.d_train_every = 2
 
     def step_schedulers(self):
-        self.scheduler_g.step()
-        self.scheduler_d.step()
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="Detected call of.*lr_scheduler")
+            self.scheduler_g.step()
+            self.scheduler_d.step()
 
     def _get_all_generator_params(self):
         return list(self.hiding_net.parameters()) + list(self.reveal_net.parameters())
