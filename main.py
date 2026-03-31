@@ -115,7 +115,7 @@ class NexusApp:
         self.reveal_net.train()
 
     # Overfit one batch
-    def run_overfit_one_batch(self, steps=200):
+    def run_overfit_one_batch(self, steps=500):
         """Train on a single batch to verify model capacity."""
         print("=" * 56)
         print("  OVERFIT ONE BATCH (Karpathy Recipe 2.8)")
@@ -146,7 +146,7 @@ class NexusApp:
                     scaler=self.scaler if self.use_amp else None,
                 )
 
-            if step % 10 == 0 or step == steps - 1:
+            if step % 25 == 0 or step == steps - 1:
                 print(
                     f"  Step {step:3d}/{steps} | "
                     f"loss={loss:.6f}  inv={l_inv:.6f}  rec={l_rec:.6f}  disc={l_disc:.4f}"
@@ -159,13 +159,15 @@ class NexusApp:
             pg["lr"] = saved_lr_d
         self.trainer.recovery_weight = saved_rw
 
+        # Judge by l_rec (recovery MSE) — total loss can't reach zero because
+        # l_inv and l_rec are competing objectives by design.
         print()
-        if loss < 0.01:
-            print("  PASS: Loss reached near-zero. Model has sufficient capacity.")
-        elif loss < 0.1:
-            print("  WARN: Loss is low but not near-zero. Model likely OK but check recovery.")
+        if l_rec < 0.01:
+            print("  PASS: Recovery MSE near-zero. Model can memorize the batch.")
+        elif l_rec < 0.05:
+            print("  WARN: Recovery MSE is low but not near-zero. Model likely OK.")
         else:
-            print("  FAIL: Loss did not converge. Possible capacity or learning rate problem.")
+            print("  FAIL: Recovery MSE did not converge. Possible capacity or LR problem.")
         print("=" * 56)
 
     # Main training loop with early stopping
